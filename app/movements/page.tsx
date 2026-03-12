@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -40,7 +40,7 @@ type Customer = {
   name: string | null;
 };
 
-export default function MovementsPage() {
+function MovementsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -306,7 +306,8 @@ export default function MovementsPage() {
         <div>
           <h1 style={title}>Movimenti magazzino</h1>
           <p style={subtitle}>
-            Interroga rapidamente i movimenti di prodotti, officina e bici aziendali.
+            Interroga rapidamente i movimenti di prodotti, officina e bici
+            aziendali.
           </p>
         </div>
       </div>
@@ -542,6 +543,14 @@ export default function MovementsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function MovementsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24 }}>Caricamento...</div>}>
+      <MovementsContent />
+    </Suspense>
   );
 }
 

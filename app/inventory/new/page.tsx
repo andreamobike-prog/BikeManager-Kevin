@@ -146,7 +146,7 @@ padding:30,
 borderRadius:10,
 border:"1px solid #eee",
 display:"flex",
-flexDirection:"column",
+flexDirection: "column" as const,
 gap:20
 }
 

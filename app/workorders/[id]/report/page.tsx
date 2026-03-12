@@ -5,21 +5,25 @@ import { useParams } from "next/navigation";
 import { supabase } from "../../../../lib/supabase";
 import html2pdf from "html2pdf.js";
 
+type Customer = {
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+};
+
+type Bike = {
+  brand?: string | null;
+  model?: string | null;
+  serial?: string | null;
+  color?: string | null;
+};
+
 type WorkOrder = {
   id: string;
   notes?: string | null;
   created_at?: string | null;
-  customers?: {
-    name?: string | null;
-    phone?: string | null;
-    email?: string | null;
-  } | null;
-  bikes?: {
-    brand?: string | null;
-    model?: string | null;
-    serial?: string | null;
-    color?: string | null;
-  } | null;
+  customers?: Customer | null;
+  bikes?: Bike[] | null;
 };
 
 type Product = {
@@ -45,6 +49,21 @@ type Service = {
   notes?: string | null;
   custom_price?: number | null;
   service_date?: string | null;
+};
+
+type ComputedPart = Part & {
+  productTitle: string;
+  productEan: string;
+  originalPrice: number;
+  appliedPrice: number;
+  modified: boolean;
+  rowTotal: number;
+};
+
+type ComputedService = Service & {
+  calculatedPrice: number;
+  appliedPrice: number;
+  modified: boolean;
 };
 
 export default function WorkOrderReport() {
@@ -90,7 +109,9 @@ export default function WorkOrderReport() {
   }
 
   useEffect(() => {
-    if (id) loadData();
+    if (id) {
+      loadData();
+    }
   }, [id]);
 
   const productsMap = useMemo(() => {
@@ -101,7 +122,7 @@ export default function WorkOrderReport() {
     return map;
   }, [products]);
 
-  const partsComputed = useMemo(() => {
+  const partsComputed: ComputedPart[] = useMemo(() => {
     return parts.map((p) => {
       const product = productsMap[p.product_id];
       const originalPrice = p.price_snapshot ?? product?.price_b2c ?? 0;
@@ -123,7 +144,7 @@ export default function WorkOrderReport() {
     });
   }, [parts, productsMap]);
 
-  const servicesComputed = useMemo(() => {
+  const servicesComputed: ComputedService[] = useMemo(() => {
     return services.map((s) => {
       const calculatedPrice = (s.hours || 0) * hourlyRate;
       const appliedPrice = s.custom_price ?? calculatedPrice;
@@ -150,6 +171,9 @@ export default function WorkOrderReport() {
 
   const total = partsTotal + serviceTotal;
 
+  const firstBike = order?.bikes?.[0] ?? null;
+  const bikeName = `${firstBike?.brand || ""} ${firstBike?.model || ""}`.trim();
+
   function formatCurrency(value: number | null | undefined) {
     return new Intl.NumberFormat("it-IT", {
       style: "currency",
@@ -169,12 +193,18 @@ export default function WorkOrderReport() {
   function downloadPDF() {
     const element = document.getElementById("report");
 
+    if (!element) return;
+
     const opt = {
       margin: 10,
-      filename: `scheda_lavoro_${order?.id}.pdf`,
-      image: { type: "jpeg", quality: 1 },
+      filename: `report-${order?.id || "workorder"}.pdf`,
+      image: { type: "jpeg" as const, quality: 0.98 },
       html2canvas: { scale: 2 },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      jsPDF: {
+        unit: "mm" as const,
+        format: "a4" as const,
+        orientation: "portrait" as const,
+      },
     };
 
     html2pdf().set(opt).from(element).save();
@@ -185,7 +215,6 @@ export default function WorkOrderReport() {
 
     const recipient = order.customers?.email || "";
     const customerName = order.customers?.name || "cliente";
-    const bikeName = `${order.bikes?.brand || ""} ${order.bikes?.model || ""}`.trim();
     const subject = `Scheda lavoro ${order.id} - ${bikeName || "Bici"}`;
 
     const body = [
@@ -290,7 +319,7 @@ export default function WorkOrderReport() {
         }}
       >
         <div>
-          <img src="/bigalogo.png" style={{ height: 64 }} />
+          <img src="/bigalogo.png" alt="Biga Bike" style={{ height: 64 }} />
         </div>
 
         <div style={{ textAlign: "right" }}>
@@ -342,14 +371,14 @@ export default function WorkOrderReport() {
         >
           <div style={boxTitle}>Bici</div>
           <div style={infoLine}>
-            <strong>Modello:</strong> {order.bikes?.brand || "-"}{" "}
-            {order.bikes?.model || ""}
+            <strong>Modello:</strong> {firstBike?.brand || "-"}{" "}
+            {firstBike?.model || ""}
           </div>
           <div style={infoLine}>
-            <strong>Telaio:</strong> {order.bikes?.serial || "-"}
+            <strong>Telaio:</strong> {firstBike?.serial || "-"}
           </div>
           <div style={infoLine}>
-            <strong>Colore:</strong> {order.bikes?.color || "-"}
+            <strong>Colore:</strong> {firstBike?.color || "-"}
           </div>
         </div>
       </div>
@@ -477,7 +506,7 @@ export default function WorkOrderReport() {
           ) : (
             servicesComputed.map((s) => (
               <tr key={s.id}>
-                <td>{s.service_date || "-"}</td>
+                <td>{formatDate(s.service_date)}</td>
                 <td style={{ fontWeight: 700 }}>{s.title}</td>
                 <td style={{ textAlign: "center" }}>{s.hours || 0}</td>
                 <td style={{ textAlign: "right" }}>

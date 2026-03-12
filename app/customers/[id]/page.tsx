@@ -25,13 +25,13 @@ type Bike = {
 
 type WorkOrder = {
   id: string;
-  created_at: string | null;
-  status: string | null;
+  created_at: string;
+  status: string;
   notes: string | null;
-  bikes?: {
+  bikes: {
     brand: string | null;
     model: string | null;
-  } | null;
+  }[];
 };
 
 type ToastType = "success" | "error" | "info";
@@ -507,7 +507,7 @@ export default function CustomerDetail() {
                     </td>
 
                     <td style={td}>
-                      {order.bikes?.brand || "-"} {order.bikes?.model || ""}
+                     {order.bikes?.[0]?.brand || "-"} {order.bikes?.[0]?.model || ""}
                     </td>
 
                     <td style={td}>
