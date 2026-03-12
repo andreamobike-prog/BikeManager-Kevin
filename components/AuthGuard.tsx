@@ -29,7 +29,7 @@ export default function AuthGuard({
   }, [pathname, router]);
 
   if (!checked) {
-    return <div style={{ padding: 24 }}>Caricamento...</div>;
+    return <div style={{ padding: 40 }}>Caricamento...</div>;
   }
 
   return <>{children}</>;
