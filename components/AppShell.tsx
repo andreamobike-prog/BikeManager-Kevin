@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import AuthGuard from "./AuthGuard";
 import AppSidebar from "./AppSidebar";
 
 export default function AppShell({
@@ -12,16 +13,16 @@ export default function AppShell({
   const hideSidebar = pathname === "/login";
 
   if (hideSidebar) {
-    return <>{children}</>;
+    return <AuthGuard>{children}</AuthGuard>;
   }
 
   return (
-    <div style={shell}>
-      <AppSidebar />
-      <main style={main}>
-        {children}
-      </main>
-    </div>
+    <AuthGuard>
+      <div style={shell}>
+        <AppSidebar />
+        <main style={main}>{children}</main>
+      </div>
+    </AuthGuard>
   );
 }
 

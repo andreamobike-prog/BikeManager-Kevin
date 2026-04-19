@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Bike Manager Plus",
-    short_name: "BikeManager",
-    description: "Gestionale officina bici",
+    name: "Gestionale Kevin",
+    short_name: "Kevin",
+    description: "Gestionale Kevin per officina e magazzino",
     start_url: "/",
     display: "standalone",
     background_color: "#f6f8fb",

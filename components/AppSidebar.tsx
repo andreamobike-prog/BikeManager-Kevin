@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
@@ -10,11 +10,7 @@ import {
   Building2,
   Package,
   ArrowLeftRight,
-  Bike,
   Wrench,
-  ReceiptText,
-  Hammer,
-  Settings2,
   LogOut,
   type LucideIcon,
 } from "lucide-react";
@@ -41,36 +37,7 @@ export default function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const [pendingNonBillable, setPendingNonBillable] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    loadPendingNonBillable();
-
-    const interval = setInterval(() => {
-      loadPendingNonBillable();
-    }, 12000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
-
-  async function loadPendingNonBillable() {
-    const { count, error } = await supabase
-      .from("non_billable_work_order_items")
-      .select("*", { count: "exact", head: true })
-      .eq("handled", false);
-
-    if (error) {
-      console.error("Errore caricamento badge ricambi da gestire:", error);
-      return;
-    }
-
-    setPendingNonBillable(count || 0);
-  }
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -120,18 +87,18 @@ export default function AppSidebar() {
         ],
       },
       {
-  section: "Officina",
-  items: [
-    {
-      href: "/workorders",
-      label: "Schede officina",
-      sub: "Lavori e interventi",
-      icon: Wrench,
-    },
-  ],
-},
+        section: "Officina",
+        items: [
+          {
+            href: "/workorders",
+            label: "Schede officina",
+            sub: "Lavori e interventi",
+            icon: Wrench,
+          },
+        ],
+      },
     ],
-    [pendingNonBillable]
+    []
   );
 
   return (
@@ -160,15 +127,15 @@ export default function AppSidebar() {
             <div className="biga-sidebar__brand-logo-wrap">
               <img
                 src="/kc-logo.png"
-                alt="KC Bike Rental"
+                alt="Gestionale Kevin"
                 className="biga-sidebar__brand-logo"
               />
             </div>
 
             <div className="biga-sidebar__brand-content">
-              <div className="biga-sidebar__brand-title">Kevin Cici</div>
+              <div className="biga-sidebar__brand-title">Gestionale Kevin</div>
               <div className="biga-sidebar__brand-subtitle">
-                Gestionale officina
+                Officina e magazzino
               </div>
             </div>
           </Link>
@@ -187,6 +154,7 @@ export default function AppSidebar() {
                       <Link
                         key={item.href}
                         href={item.href}
+                        onClick={() => setMobileOpen(false)}
                         className={`biga-sidebar__link ${active ? "is-active" : ""
                           } ${item.highlight ? "has-highlight" : ""}`}
                       >
@@ -232,7 +200,6 @@ export default function AppSidebar() {
             </button>
           </div>
         </div>
-        
       </aside>
     </>
   );

@@ -1,5 +1,5 @@
-const CACHE_NAME = "bike-manager-plus-v1";
-const urlsToCache = ["/", "/login", "/manifest.webmanifest", "/bigalogo.png"];
+const CACHE_NAME = "gestionale-kevin-v1";
+const urlsToCache = ["/", "/login", "/manifest.webmanifest", "/kc-logo.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

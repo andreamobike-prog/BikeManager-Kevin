@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
-  title: "Biga Bike",
-  description: "Gestionale officina e magazzino",
+  title: "Gestionale Kevin",
+  description: "Gestionale Kevin per officina e magazzino",
 };
 
 export default function RootLayout({

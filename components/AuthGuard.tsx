@@ -1,8 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { supabase } from "@/lib/supabase";
+import type { Session } from "@supabase/supabase-js";
 import { usePathname, useRouter } from "next/navigation";
+
+const PUBLIC_ROUTES = new Set(["/login"]);
+const PUBLIC_PREFIXES = ["/auth/callback", "/callback"];
+
+function isPublicRoute(pathname: string) {
+  return (
+    PUBLIC_ROUTES.has(pathname) ||
+    PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  );
+}
 
 export default function AuthGuard({
   children,
@@ -18,18 +29,15 @@ export default function AuthGuard({
   useEffect(() => {
     let mounted = true;
 
-    async function runCheck() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
+    function applyAuthState(session: Session | null) {
       if (!mounted) return;
 
-      const isLoginPage = pathname === "/login";
+      const publicRoute = isPublicRoute(pathname);
+      const redirectAuthenticated = pathname === "/" || pathname === "/login";
 
       if (session) {
-        if (isLoginPage) {
-          router.replace("/");
+        if (redirectAuthenticated) {
+          router.replace("/dashboard");
           return;
         }
 
@@ -38,46 +46,30 @@ export default function AuthGuard({
         return;
       }
 
-      if (!session) {
-        if (isLoginPage) {
-          setAllowed(true);
-          setLoading(false);
-          return;
-        }
-
-        router.replace("/login");
+      if (publicRoute) {
+        setAllowed(true);
+        setLoading(false);
         return;
       }
+
+      router.replace("/login");
+    }
+
+    async function runCheck() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      applyAuthState(session);
     }
 
     runCheck();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      const isLoginPage = pathname === "/login";
-
-      if (session) {
-        if (isLoginPage) {
-          router.replace("/");
-          return;
-        }
-
-        setAllowed(true);
-        setLoading(false);
-        return;
-      }
-
-      if (!session) {
-        if (isLoginPage) {
-          setAllowed(true);
-          setLoading(false);
-          return;
-        }
-
-        router.replace("/login");
-      }
-    });
+    } = supabase.auth.onAuthStateChange((_event, session) =>
+      applyAuthState(session)
+    );
 
     return () => {
       mounted = false;

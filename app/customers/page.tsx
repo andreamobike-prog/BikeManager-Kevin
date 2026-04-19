@@ -362,9 +362,9 @@ export default function CustomersPage() {
 
   function exportEventXlsx(eventField: EventFormat) {
     const labels: Record<EventFormat, string> = {
-      biga_race: "BigaRace",
-      biga_adventure: "BigaAdventure",
-      biga_love: "BigaLove",
+      biga_race: "Gestionale Kevin Race",
+      biga_adventure: "Gestionale Kevin Adventure",
+      biga_love: "Gestionale Kevin Love",
     };
 
     const selected = customers.filter((customer) => Boolean(customer[eventField]));
@@ -692,7 +692,7 @@ export default function CustomersPage() {
                         className="apple-input"
                         placeholder={
                           form.customer_type === "company"
-                            ? "Es. Biga S.R.L."
+                            ? "Es. Gestionale Kevin S.R.L."
                             : "Es. Mario Rossi"
                         }
                         value={form.name}

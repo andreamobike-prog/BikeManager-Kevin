@@ -328,7 +328,7 @@ export default function WorkOrderReport() {
       `Nota: il PDF va eventualmente allegato manualmente dopo il download.`,
       ``,
       `Grazie,`,
-      `Biga Bike`,
+      `Gestionale Kevin`,
     ].join("\n");
 
     const mailto = `mailto:${encodeURIComponent(
