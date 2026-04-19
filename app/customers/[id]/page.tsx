@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../../lib/supabase";
 import { useParams, useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+
+type CustomerType = "private" | "company";
+type ToastType = "success" | "error" | "info";
 
 type Customer = {
   id: string;
@@ -10,85 +13,118 @@ type Customer = {
   phone: string | null;
   email: string | null;
   notes: string | null;
-  created_at?: string | null;
+  created_at: string | null;
+  customer_type: CustomerType | null;
+  vat_number: string | null;
+  tax_code: string | null;
+  address: string | null;
+  city: string | null;
+  zip: string | null;
+  province: string | null;
+  country: string | null;
+  address_notes: string | null;
+  contact_name: string | null;
+  pec: string | null;
+  iban: string | null;
+  sdi_code: string | null;
+  biga_race: boolean | null;
+  biga_adventure: boolean | null;
+  biga_love: boolean | null;
 };
 
-type Bike = {
+type CustomerBike = {
   id: string;
-  customer_id: string;
+  customer_id: string | null;
   brand: string | null;
   model: string | null;
   serial: string | null;
+  serial_number: string | null;
+  bike_type: string | null;
   color: string | null;
-  created_at?: string | null;
+  notes: string | null;
+  purchase_date: string | null;
+  invoice_number: string | null;
+  purchase_price: number | null;
+  sale_price: number | null;
 };
+
+type WorkOrderBikeRelation = {
+  brand?: string | null;
+  model?: string | null;
+  serial?: string | null;
+  serial_number?: string | null;
+  bike_type?: string | null;
+} | null;
 
 type WorkOrder = {
   id: string;
-  created_at: string;
-  status: string;
+  status: string | null;
+  created_at: string | null;
   notes: string | null;
-  bikes: {
-    brand: string | null;
-    model: string | null;
-  }[];
+  bike_id?: string | null;
+  bikes?: WorkOrderBikeRelation;
 };
 
-type ToastType = "success" | "error" | "info";
+const EMPTY_CUSTOMER: Customer = {
+  id: "",
+  name: "",
+  phone: "",
+  email: "",
+  notes: "",
+  created_at: null,
+  customer_type: "private",
+  vat_number: "",
+  tax_code: "",
+  address: "",
+  city: "",
+  zip: "",
+  province: "",
+  country: "Italia",
+  address_notes: "",
+  contact_name: "",
+  pec: "",
+  iban: "",
+  sdi_code: "",
+  biga_race: false,
+  biga_adventure: false,
+  biga_love: false,
+};
 
-export default function CustomerDetail() {
+export default function CustomerDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const id = String(params.id);
+  const customerId = String(params?.id || "");
 
-  const [customer, setCustomer] = useState<Customer | null>(null);
-  const [bikes, setBikes] = useState<Bike[]>([]);
-  const [orders, setOrders] = useState<WorkOrder[]>([]);
+  const [customer, setCustomer] = useState<Customer>(EMPTY_CUSTOMER);
+  const [draft, setDraft] = useState<Customer>(EMPTY_CUSTOMER);
+
+  const [bikes, setBikes] = useState<CustomerBike[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+
   const [loading, setLoading] = useState(true);
-
-  const [showCustomerModal, setShowCustomerModal] = useState(false);
-  const [showBikeModal, setShowBikeModal] = useState(false);
-  const [showAddBikeModal, setShowAddBikeModal] = useState(false);
-
-  const [selectedBike, setSelectedBike] = useState<Bike | null>(null);
-  const [deleteBikeId, setDeleteBikeId] = useState<string | null>(null);
-
-  const [savingCustomer, setSavingCustomer] = useState(false);
-  const [savingBike, setSavingBike] = useState(false);
-  const [deletingBike, setDeletingBike] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [editMode, setEditMode] = useState(false);
 
   const [toast, setToast] = useState<{
-    message: string;
     type: ToastType;
+    message: string;
   } | null>(null);
 
-  const [customerForm, setCustomerForm] = useState({
-    name: "",
-    phone: "",
-    email: "",
-    notes: "",
-  });
-
-  const [bikeForm, setBikeForm] = useState({
-    brand: "",
-    model: "",
-    serial: "",
-    color: "",
-  });
-
   useEffect(() => {
+    if (!customerId) return;
     loadAll();
-  }, [id]);
+  }, [customerId]);
 
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 2600);
+    const timer = setTimeout(() => setToast(null), 2800);
     return () => clearTimeout(timer);
   }, [toast]);
 
   async function loadAll() {
     setLoading(true);
-    await Promise.all([loadCustomer(), loadBikes(), loadOrders()]);
+    await Promise.all([loadCustomer(), loadBikes(), loadWorkOrders()]);
     setLoading(false);
   }
 
@@ -96,715 +132,790 @@ export default function CustomerDetail() {
     const { data, error } = await supabase
       .from("customers")
       .select("*")
-      .eq("id", id)
+      .eq("id", customerId)
       .single();
 
     if (error) {
-      console.error(error);
+      console.error("Errore caricamento cliente:", error);
       setToast({
-        message: `Errore caricamento cliente: ${error.message}`,
         type: "error",
+        message: `Errore caricamento cliente: ${error.message}`,
       });
       return;
     }
 
-    if (data) {
-      setCustomer(data as Customer);
-      setCustomerForm({
-        name: data.name || "",
-        phone: data.phone || "",
-        email: data.email || "",
-        notes: data.notes || "",
-      });
-    }
+    const loaded = {
+      ...EMPTY_CUSTOMER,
+      ...(data as Customer),
+      biga_race: Boolean((data as any)?.biga_race),
+      biga_adventure: Boolean((data as any)?.biga_adventure),
+      biga_love: Boolean((data as any)?.biga_love),
+    };
+
+    setCustomer(loaded);
+    setDraft(loaded);
   }
 
   async function loadBikes() {
     const { data, error } = await supabase
       .from("bikes")
-      .select("*")
-      .eq("customer_id", id)
+      .select(`
+        id,
+        customer_id,
+        brand,
+        model,
+        serial,
+        serial_number,
+        bike_type,
+        color,
+        notes,
+        purchase_date,
+        invoice_number,
+        purchase_price,
+        sale_price
+      `)
+      .eq("customer_id", customerId)
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error(error);
+      console.error("Errore caricamento bici:", error);
       setToast({
-        message: `Errore caricamento bici: ${error.message}`,
         type: "error",
+        message: `Errore caricamento bici: ${error.message}`,
       });
       return;
     }
 
-    setBikes((data as Bike[]) || []);
+    setBikes((data as CustomerBike[]) || []);
   }
 
-  async function loadOrders() {
+  async function loadWorkOrders() {
     const { data, error } = await supabase
       .from("work_orders")
       .select(
         `
         id,
-        created_at,
         status,
+        created_at,
         notes,
-        bikes(brand,model)
+        bike_id,
+        bikes(
+          brand,
+          model,
+          serial,
+          serial_number,
+          bike_type
+        )
       `
       )
-      .eq("customer_id", id)
+      .eq("customer_id", customerId)
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error(error);
+      console.error("Errore caricamento schede lavoro:", error);
       setToast({
-        message: `Errore caricamento schede officina: ${error.message}`,
         type: "error",
+        message: `Errore caricamento schede lavoro: ${error.message}`,
       });
       return;
     }
 
-    setOrders((data as WorkOrder[]) || []);
+    setWorkOrders((data as WorkOrder[]) || []);
   }
 
-  function resetBikeForm() {
-    setBikeForm({
-      brand: "",
-      model: "",
-      serial: "",
-      color: "",
-    });
+  function updateField<K extends keyof Customer>(key: K, value: Customer[K]) {
+    setDraft((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
   }
 
-  async function updateCustomer() {
-    if (!customerForm.name.trim()) {
+  function normalizeEmail(value: string | null) {
+    return String(value || "").trim().toLowerCase() || null;
+  }
+
+  function normalizeUpper(value: string | null) {
+    return String(value || "").trim().toUpperCase() || null;
+  }
+
+  function normalizeText(value: string | null) {
+    return String(value || "").trim() || null;
+  }
+
+  function getTypeLabel(type: CustomerType | null) {
+    return type === "company" ? "Azienda" : "Privato";
+  }
+
+  function formatStatus(status: string | null) {
+    if (status === "open") return "Aperta";
+    if (status === "working") return "In lavorazione";
+    if (status === "closed") return "Chiusa";
+    return status || "-";
+  }
+
+  function getStatusBadgeClass(status: string | null) {
+    if (status === "open") return "customer-detail-status customer-detail-status--open";
+    if (status === "working") return "customer-detail-status customer-detail-status--working";
+    if (status === "closed") return "customer-detail-status customer-detail-status--closed";
+    return "customer-detail-status customer-detail-status--default";
+  }
+
+  function statusStyle(status: string | null): React.CSSProperties {
+    if (status === "open") {
+      return { background: "#e0f2fe", color: "#075985" };
+    }
+    if (status === "working") {
+      return { background: "#fff7ed", color: "#c2410c" };
+    }
+    if (status === "closed") {
+      return { background: "#e5e7eb", color: "#374151" };
+    }
+    return { background: "#f3f4f6", color: "#374151" };
+  }
+
+  function getBikeSerialLabel(bike: CustomerBike) {
+    return bike.serial_number || bike.serial || "-";
+  }
+
+  function getBikeTypeLabel(bike: CustomerBike) {
+    return bike.bike_type || "-";
+  }
+
+  function getWorkOrderBikeLabel(bike?: WorkOrderBikeRelation) {
+    if (!bike) return "Bici non collegata";
+
+    const brand = bike.brand || "";
+    const model = bike.model || "";
+    const serial = bike.serial_number || bike.serial || "";
+
+    const firstPart = [brand, model].filter(Boolean).join(" ").trim();
+    if (firstPart && serial) return `${firstPart} · ${serial}`;
+    if (firstPart) return firstPart;
+    if (serial) return serial;
+
+    return "Bici non collegata";
+  }
+
+  function formatCurrency(value: number | null | undefined) {
+    return new Intl.NumberFormat("it-IT", {
+      style: "currency",
+      currency: "EUR",
+      maximumFractionDigits: 2,
+    }).format(Number(value || 0));
+  }
+
+  async function saveCustomer() {
+    if (!draft.name?.trim()) {
       setToast({
-        message: "Il nome cliente è obbligatorio.",
         type: "error",
+        message: "Il nome / denominazione cliente è obbligatorio.",
       });
       return;
     }
 
-    setSavingCustomer(true);
+    setSaving(true);
+
+    const payload = {
+      name: draft.name.trim(),
+      phone: normalizeText(draft.phone),
+      email: normalizeEmail(draft.email),
+      notes: normalizeText(draft.notes),
+      customer_type: draft.customer_type || "private",
+      vat_number: normalizeUpper(draft.vat_number),
+      tax_code: normalizeUpper(draft.tax_code),
+      address: normalizeText(draft.address),
+      city: normalizeText(draft.city),
+      zip: normalizeText(draft.zip),
+      province: normalizeUpper(draft.province),
+      country: normalizeText(draft.country),
+      address_notes: normalizeText(draft.address_notes),
+      contact_name: normalizeText(draft.contact_name),
+      pec: normalizeEmail(draft.pec),
+      iban: normalizeUpper(draft.iban),
+      sdi_code: normalizeUpper(draft.sdi_code),
+      biga_race: Boolean(draft.biga_race),
+      biga_adventure: Boolean(draft.biga_adventure),
+      biga_love: Boolean(draft.biga_love),
+    };
 
     const { error } = await supabase
       .from("customers")
-      .update({
-        name: customerForm.name.trim(),
-        phone: customerForm.phone.trim() || null,
-        email: customerForm.email.trim() || null,
-        notes: customerForm.notes.trim() || null,
-      })
-      .eq("id", id);
+      .update(payload)
+      .eq("id", customerId);
 
     if (error) {
+      console.error("Errore salvataggio cliente:", error);
       setToast({
-        message: "Errore aggiornamento cliente.",
         type: "error",
+        message: `Errore salvataggio: ${error.message}`,
       });
-      console.error(error);
-      setSavingCustomer(false);
+      setSaving(false);
       return;
     }
 
-    setShowCustomerModal(false);
-    await loadCustomer();
-    setSavingCustomer(false);
+    setCustomer((prev) => ({
+      ...prev,
+      ...payload,
+    }));
+
+    setEditMode(false);
+    setSaving(false);
 
     setToast({
+      type: "success",
       message: "Cliente aggiornato correttamente.",
-      type: "success",
     });
   }
 
-  async function createBike() {
-    if (!bikeForm.brand.trim()) {
-      setToast({
-        message: "Inserisci la marca della bici.",
-        type: "error",
-      });
-      return;
-    }
-
-    if (!bikeForm.model.trim()) {
-      setToast({
-        message: "Inserisci il modello della bici.",
-        type: "error",
-      });
-      return;
-    }
-
-    setSavingBike(true);
-
-    const { error } = await supabase.from("bikes").insert({
-      customer_id: id,
-      brand: bikeForm.brand.trim(),
-      model: bikeForm.model.trim(),
-      serial: bikeForm.serial.trim() || null,
-      color: bikeForm.color.trim() || null,
-    });
-
-    if (error) {
-      setToast({
-        message: "Errore creazione bici.",
-        type: "error",
-      });
-      setSavingBike(false);
-      return;
-    }
-
-    resetBikeForm();
-    setShowAddBikeModal(false);
-    await loadBikes();
-    setSavingBike(false);
-
-    setToast({
-      message: "Bici aggiunta correttamente.",
-      type: "success",
-    });
+  function cancelEdit() {
+    setDraft(customer);
+    setEditMode(false);
   }
 
-  async function updateBike() {
-    if (!selectedBike) return;
+  async function deleteCustomer() {
+    const ok = window.confirm(
+      `Vuoi davvero eliminare il cliente "${customer.name || "senza nome"}"?`
+    );
 
-    if (!bikeForm.brand.trim()) {
-      setToast({
-        message: "Inserisci la marca della bici.",
-        type: "error",
-      });
-      return;
-    }
+    if (!ok) return;
 
-    if (!bikeForm.model.trim()) {
-      setToast({
-        message: "Inserisci il modello della bici.",
-        type: "error",
-      });
-      return;
-    }
-
-    setSavingBike(true);
+    setDeleting(true);
 
     const { error } = await supabase
-      .from("bikes")
-      .update({
-        brand: bikeForm.brand.trim(),
-        model: bikeForm.model.trim(),
-        serial: bikeForm.serial.trim() || null,
-        color: bikeForm.color.trim() || null,
-      })
-      .eq("id", selectedBike.id);
+      .from("customers")
+      .delete()
+      .eq("id", customerId);
 
     if (error) {
+      console.error("Errore eliminazione cliente:", error);
       setToast({
-        message: "Errore modifica bici.",
         type: "error",
+        message: `Errore eliminazione: ${error.message}`,
       });
-      setSavingBike(false);
+      setDeleting(false);
       return;
     }
 
-    setShowBikeModal(false);
-    await loadBikes();
-    setSavingBike(false);
-
-    setToast({
-      message: "Bici aggiornata correttamente.",
-      type: "success",
-    });
+    router.push("/customers");
   }
 
-  async function deleteBike() {
-    if (!deleteBikeId) return;
+  const fullAddress = useMemo(() => {
+    const source = editMode ? draft : customer;
 
-    setDeletingBike(true);
+    return [
+      source.address || "",
+      source.address_notes || "",
+      [
+        source.zip || "",
+        source.city || "",
+        source.province ? `(${source.province})` : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      source.country || "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  }, [customer, draft, editMode]);
 
-    const { error } = await supabase.from("bikes").delete().eq("id", deleteBikeId);
-
-    if (error) {
-      setToast({
-        message: "Errore eliminazione bici.",
-        type: "error",
-      });
-      setDeletingBike(false);
-      return;
-    }
-
-    setDeleteBikeId(null);
-    await loadBikes();
-    setDeletingBike(false);
-
-    setToast({
-      message: "Bici eliminata correttamente.",
-      type: "success",
-    });
-  }
-
-  const totalOrders = useMemo(() => orders.length, [orders]);
-  const totalBikes = useMemo(() => bikes.length, [bikes]);
-  const openOrders = useMemo(
-    () => orders.filter((o) => o.status === "open" || o.status === "working").length,
-    [orders]
-  );
+  const current = editMode ? draft : customer;
 
   if (loading) {
-    return <div style={{ padding: 40 }}>Caricamento...</div>;
-  }
-
-  if (!customer) {
-    return <div style={{ padding: 40 }}>Cliente non trovato.</div>;
+    return <div className="apple-empty">Caricamento scheda cliente...</div>;
   }
 
   return (
-    <div style={page}>
+    <div className="app-page-shell">
       {toast && (
         <div
-          style={{
-            ...toastStyle,
-            ...(toast.type === "success"
-              ? toastSuccess
-              : toast.type === "error"
-              ? toastError
-              : toastInfo),
-          }}
+          className={`toast ${toast.type === "success"
+            ? "toastSuccess"
+            : toast.type === "error"
+              ? "toastError"
+              : "toastInfo"
+            }`}
         >
           {toast.message}
         </div>
       )}
 
-      <div style={topBar}>
-        <button onClick={() => router.push("/customers")} style={secondaryBtn}>
-          ← Torna ai clienti
-        </button>
-      </div>
-
-      <div style={customerHeader}>
-        <div style={customerLeft}>
-          <div style={avatar}>
-            {(customer.name || "?").charAt(0).toUpperCase()}
-          </div>
-
-          <div>
-            <div style={customerName}>{customer.name}</div>
-            <div style={customerMeta}>📞 {customer.phone || "-"}</div>
-            <div style={customerMeta}>✉️ {customer.email || "-"}</div>
-          </div>
-        </div>
-
-        <button onClick={() => setShowCustomerModal(true)} style={blueBtn}>
-          Modifica cliente
-        </button>
-      </div>
-
-      <div style={statsGrid}>
-        <StatCard label="Bici registrate" value={String(totalBikes)} />
-        <StatCard label="Schede officina" value={String(totalOrders)} />
-        <StatCard label="Schede attive" value={String(openOrders)} />
-      </div>
-
-      <div style={notesCard}>
-        <div style={sectionMiniTitle}>Note cliente</div>
-        <div style={notesText}>{customer.notes || "Nessuna nota disponibile."}</div>
-      </div>
-
-      <div style={sectionHeader}>
-        <div>
-          <h2 style={sectionTitle}>Bici cliente</h2>
-          <p style={sectionSubtitle}>
-            Gestisci le bici associate al cliente.
+      <div className="page-header customer-detail-header">
+        <div className="page-header__left">
+          <div className="apple-kicker">Scheda cliente</div>
+          <h1 className="apple-page-title customer-detail-title">
+            {current.name || "Cliente"}
+          </h1>
+          <p className="apple-page-subtitle customer-detail-subtitle">
+            Visualizza tutti i dati del cliente, le bici associate e le schede
+            lavoro collegate.
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            resetBikeForm();
-            setShowAddBikeModal(true);
-          }}
-          style={greenBtn}
-        >
-          + Aggiungi bici
-        </button>
+        <div className="page-header__right customer-detail-header-actions">
+          <button className="btn-secondary" onClick={() => router.push("/customers")}>
+            ← Torna ai clienti
+          </button>
+
+          <button
+            className="btn-secondary"
+            onClick={() => router.push(`/bikes?customerId=${customerId}`)}
+          >
+            + Aggiungi bici cliente
+          </button>
+
+          <button
+            className="btn-secondary"
+            onClick={() => router.push(`/workorders/new?customerId=${customerId}`)}
+          >
+            + Nuova scheda lavoro
+          </button>
+
+          {!editMode ? (
+            <button className="btn-primary" onClick={() => setEditMode(true)}>
+              Modifica cliente
+            </button>
+          ) : (
+            <>
+              <button className="btn-secondary" onClick={cancelEdit} disabled={saving}>
+                Annulla modifica
+              </button>
+              <button className="btn-primary" onClick={saveCustomer} disabled={saving}>
+                {saving ? "Salvataggio..." : "Salva modifiche"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {bikes.length === 0 ? (
-        <div style={emptyBox}>Nessuna bici associata a questo cliente.</div>
-      ) : (
-        <div style={bikeGrid}>
-          {bikes.map((bike) => (
-            <div key={bike.id} style={bikeCard}>
-              <div style={bikeBrand}>
-                🚲 {bike.brand} {bike.model}
+      <div className="customer-detail-hero">
+        <div className="customer-detail-hero__left">
+          <div className="customer-detail-avatar">
+            {(current.name || "?").charAt(0).toUpperCase()}
+          </div>
+
+          <div className="customer-detail-hero__content">
+            <div className="customer-detail-name-row">
+              <div className="customer-detail-name">{current.name || "-"}</div>
+              <span
+                className={
+                  current.customer_type === "company"
+                    ? "badge badge-purple"
+                    : "badge badge-blue"
+                }
+              >
+                {getTypeLabel(current.customer_type)}
+              </span>
+            </div>
+
+            <div className="customer-detail-meta-box">
+  <div className="customer-detail-meta customer-detail-meta--inverse">
+    ID cliente: {current.id}
+  </div>
+  <div className="customer-detail-meta customer-detail-meta--inverse">
+    Creato il{" "}
+    {current.created_at
+      ? new Date(current.created_at).toLocaleDateString("it-IT")
+      : "-"}
+  </div>
+</div>
+
+            <div className="customer-detail-summary customer-detail-summary--inline">
+              <div className="customer-detail-summary-box">
+                <div className="customer-detail-summary-label">Email</div>
+                <div className="customer-detail-summary-value">{current.email || "-"}</div>
               </div>
 
-              <div style={bikeInfoRow}>
-                <span style={bikeLabel}>Telaio</span>
-                <span style={bikeValue}>{bike.serial || "-"}</span>
+              <div className="customer-detail-summary-box">
+                <div className="customer-detail-summary-label">Telefono</div>
+                <div className="customer-detail-summary-value">{current.phone || "-"}</div>
               </div>
 
-              <div style={bikeInfoRow}>
-                <span style={bikeLabel}>Colore</span>
-                <span style={bikeValue}>{bike.color || "-"}</span>
-              </div>
-
-              <div style={bikeActions}>
-                <button
-                  onClick={() => {
-                    setSelectedBike(bike);
-                    setBikeForm({
-                      brand: bike.brand || "",
-                      model: bike.model || "",
-                      serial: bike.serial || "",
-                      color: bike.color || "",
-                    });
-                    setShowBikeModal(true);
-                  }}
-                  style={grayBtn}
-                >
-                  Modifica
-                </button>
-
-                <button
-                  onClick={() => setDeleteBikeId(bike.id)}
-                  style={redBtn}
-                >
-                  Elimina
-                </button>
+              <div className="customer-detail-summary-box">
+                <div className="customer-detail-summary-label">Indirizzo</div>
+                <div className="customer-detail-summary-value">{fullAddress || "-"}</div>
               </div>
             </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ marginTop: 50 }}>
-        <div style={sectionHeader}>
-          <div>
-            <h2 style={sectionTitle}>Schede officina</h2>
-            <p style={sectionSubtitle}>
-              Storico delle lavorazioni collegate al cliente.
-            </p>
           </div>
         </div>
+      </div>
 
-        {orders.length === 0 ? (
-          <div style={emptyBox}>Nessuna scheda officina collegata.</div>
+      <div className="customer-detail-grid">
+
+        <div className="customer-detail-card customer-detail-card--full">
+  <section className="customer-detail-section-block">
+    <div className="customer-detail-section-title">Dati principali</div>
+
+    <div className="customer-detail-form-grid-2">
+      <Field label="Tipo cliente">
+        {editMode ? (
+          <select
+            className="apple-select"
+            value={draft.customer_type || "private"}
+            onChange={(e) =>
+              updateField("customer_type", e.target.value as CustomerType)
+            }
+          >
+            <option value="private">Privato</option>
+            <option value="company">Azienda</option>
+          </select>
         ) : (
-          <div style={ordersBox}>
-            <table style={table}>
-              <thead>
-                <tr>
-                  <th style={th}>Data</th>
-                  <th style={th}>Bici</th>
-                  <th style={th}>Stato</th>
-                  <th style={th}>Azione</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {orders.map((order) => (
-                  <tr key={order.id} style={row}>
-                    <td style={td}>
-                      {order.created_at
-                        ? new Date(order.created_at).toLocaleDateString("it-IT")
-                        : "-"}
-                    </td>
-
-                    <td style={td}>
-                     {order.bikes?.[0]?.brand || "-"} {order.bikes?.[0]?.model || ""}
-                    </td>
-
-                    <td style={td}>
-                      <span style={statusBadge(order.status)}>
-                        {order.status}
-                      </span>
-                    </td>
-
-                    <td style={td}>
-                      <button
-                        onClick={() => {
-                          if (order.status === "closed") {
-                            router.push(`/workorders/${order.id}/report`);
-                          } else {
-                            router.push(`/workorders/${order.id}`);
-                          }
-                        }}
-                        style={blueBtnSmall}
-                      >
-                        Apri
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ValueBox>{getTypeLabel(customer.customer_type)}</ValueBox>
         )}
-      </div>
+      </Field>
 
-      {showCustomerModal && (
-        <ModalShell
-          title="Modifica cliente"
-          subtitle="Aggiorna i dati anagrafici e le note del cliente."
-          icon="👤"
-        >
-          <FormField label="Nome cliente *">
-            <input
-              placeholder="Nome"
-              value={customerForm.name}
-              onChange={(e) =>
-                setCustomerForm({ ...customerForm, name: e.target.value })
-              }
-              style={inputPremium}
-            />
-          </FormField>
-
-          <FormField label="Telefono">
-            <input
-              placeholder="Telefono"
-              value={customerForm.phone}
-              onChange={(e) =>
-                setCustomerForm({ ...customerForm, phone: e.target.value })
-              }
-              style={inputPremium}
-            />
-          </FormField>
-
-          <FormField label="Email">
-            <input
-              placeholder="Email"
-              value={customerForm.email}
-              onChange={(e) =>
-                setCustomerForm({ ...customerForm, email: e.target.value })
-              }
-              style={inputPremium}
-            />
-          </FormField>
-
-          <FormField label="Note">
-            <textarea
-              placeholder="Aggiungi note utili sul cliente..."
-              value={customerForm.notes}
-              onChange={(e) =>
-                setCustomerForm({ ...customerForm, notes: e.target.value })
-              }
-              style={textareaPremium}
-            />
-          </FormField>
-
-          <div style={modalFooter}>
-            <button
-              onClick={() => setShowCustomerModal(false)}
-              style={secondaryBtnModal}
-              disabled={savingCustomer}
-            >
-              Annulla
-            </button>
-
-            <button
-              onClick={updateCustomer}
-              style={primaryBtnModal}
-              disabled={savingCustomer}
-            >
-              {savingCustomer ? "Salvataggio..." : "Salva modifiche"}
-            </button>
-          </div>
-        </ModalShell>
-      )}
-
-      {showAddBikeModal && (
-        <ModalShell
-          title="Aggiungi bici"
-          subtitle="Registra una nuova bici associata a questo cliente."
-          icon="🚲"
-        >
-          <FormField label="Marca *">
-            <input
-              placeholder="Marca"
-              value={bikeForm.brand}
-              onChange={(e) => setBikeForm({ ...bikeForm, brand: e.target.value })}
-              style={inputPremium}
-            />
-          </FormField>
-
-          <FormField label="Modello *">
-            <input
-              placeholder="Modello"
-              value={bikeForm.model}
-              onChange={(e) => setBikeForm({ ...bikeForm, model: e.target.value })}
-              style={inputPremium}
-            />
-          </FormField>
-
-          <FormField label="Numero telaio">
-            <input
-              placeholder="Telaio"
-              value={bikeForm.serial}
-              onChange={(e) => setBikeForm({ ...bikeForm, serial: e.target.value })}
-              style={inputPremium}
-            />
-          </FormField>
-
-          <FormField label="Colore">
-            <input
-              placeholder="Colore"
-              value={bikeForm.color}
-              onChange={(e) => setBikeForm({ ...bikeForm, color: e.target.value })}
-              style={inputPremium}
-            />
-          </FormField>
-
-          <div style={modalFooter}>
-            <button
-              onClick={() => setShowAddBikeModal(false)}
-              style={secondaryBtnModal}
-              disabled={savingBike}
-            >
-              Annulla
-            </button>
-
-            <button
-              onClick={createBike}
-              style={successBtnModal}
-              disabled={savingBike}
-            >
-              {savingBike ? "Salvataggio..." : "Salva bici"}
-            </button>
-          </div>
-        </ModalShell>
-      )}
-
-      {showBikeModal && (
-        <ModalShell
-          title="Modifica bici"
-          subtitle="Aggiorna i dati della bici del cliente."
-          icon="🛠️"
-        >
-          <FormField label="Marca *">
-            <input
-              value={bikeForm.brand}
-              onChange={(e) => setBikeForm({ ...bikeForm, brand: e.target.value })}
-              style={inputPremium}
-              placeholder="Marca"
-            />
-          </FormField>
-
-          <FormField label="Modello *">
-            <input
-              value={bikeForm.model}
-              onChange={(e) => setBikeForm({ ...bikeForm, model: e.target.value })}
-              style={inputPremium}
-              placeholder="Modello"
-            />
-          </FormField>
-
-          <FormField label="Numero telaio">
-            <input
-              value={bikeForm.serial}
-              onChange={(e) => setBikeForm({ ...bikeForm, serial: e.target.value })}
-              style={inputPremium}
-              placeholder="Telaio"
-            />
-          </FormField>
-
-          <FormField label="Colore">
-            <input
-              value={bikeForm.color}
-              onChange={(e) => setBikeForm({ ...bikeForm, color: e.target.value })}
-              style={inputPremium}
-              placeholder="Colore"
-            />
-          </FormField>
-
-          <div style={modalFooter}>
-            <button
-              onClick={() => setShowBikeModal(false)}
-              style={secondaryBtnModal}
-              disabled={savingBike}
-            >
-              Annulla
-            </button>
-
-            <button
-              onClick={updateBike}
-              style={primaryBtnModal}
-              disabled={savingBike}
-            >
-              {savingBike ? "Salvataggio..." : "Salva modifiche"}
-            </button>
-          </div>
-        </ModalShell>
-      )}
-
-      {deleteBikeId && (
-        <ModalShell
-          title="Elimina bici"
-          subtitle="Stai per rimuovere definitivamente questa bici dal cliente."
-          icon="🗑️"
-        >
-          <div style={dangerBox}>
-            Questa operazione non può essere annullata. Verifica di voler davvero
-            eliminare la bici selezionata.
-          </div>
-
-          <div style={modalFooter}>
-            <button
-              onClick={() => setDeleteBikeId(null)}
-              style={secondaryBtnModal}
-              disabled={deletingBike}
-            >
-              Annulla
-            </button>
-
-            <button
-              onClick={deleteBike}
-              style={dangerBtnModal}
-              disabled={deletingBike}
-            >
-              {deletingBike ? "Eliminazione..." : "Conferma eliminazione"}
-            </button>
-          </div>
-        </ModalShell>
-      )}
+      <Field
+        label={
+          current.customer_type === "company"
+            ? "Denominazione"
+            : "Nome cliente"
+        }
+      >
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.name || ""}
+            onChange={(e) => updateField("name", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.name || "-"}</ValueBox>
+        )}
+      </Field>
     </div>
-  );
-}
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={statCard}>
-      <div style={statLabel}>{label}</div>
-      <div style={statValue}>{value}</div>
+    <div className="customer-detail-form-grid-2">
+      <Field label="Referente">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.contact_name || ""}
+            onChange={(e) => updateField("contact_name", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.contact_name || "-"}</ValueBox>
+        )}
+      </Field>
+
+      <Field label="Telefono">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.phone || ""}
+            onChange={(e) => updateField("phone", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.phone || "-"}</ValueBox>
+        )}
+      </Field>
     </div>
-  );
-}
 
-function ModalShell({
-  title,
-  subtitle,
-  icon,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  icon?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={overlay}>
-      <div style={modalPremium}>
-        <div style={modalTopBar}>
-          <div style={modalIcon}>{icon || "✨"}</div>
+    <div className="customer-detail-form-grid-2">
+      <Field label="Email">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.email || ""}
+            onChange={(e) => updateField("email", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.email || "-"}</ValueBox>
+        )}
+      </Field>
 
-          <div>
-            <h2 style={modalPremiumTitle}>{title}</h2>
-            {subtitle ? <p style={modalPremiumSubtitle}>{subtitle}</p> : null}
+      <Field label="PEC">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.pec || ""}
+            onChange={(e) => updateField("pec", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.pec || "-"}</ValueBox>
+        )}
+      </Field>
+    </div>
+
+    <Field label="Note">
+      {editMode ? (
+        <textarea
+          className="apple-textarea"
+          value={draft.notes || ""}
+          onChange={(e) => updateField("notes", e.target.value)}
+        />
+      ) : (
+        <ValueBox multiline>{customer.notes || "-"}</ValueBox>
+      )}
+    </Field>
+  </section>
+
+  <section className="customer-detail-section-block customer-detail-section-block--divider">
+    <div className="customer-detail-section-title">Indirizzo</div>
+
+    <Field label="Indirizzo">
+      {editMode ? (
+        <input
+          className="apple-input"
+          value={draft.address || ""}
+          onChange={(e) => updateField("address", e.target.value)}
+        />
+      ) : (
+        <ValueBox>{customer.address || "-"}</ValueBox>
+      )}
+    </Field>
+
+    <div className="customer-detail-form-grid-3">
+      <Field label="CAP">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.zip || ""}
+            onChange={(e) => updateField("zip", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.zip || "-"}</ValueBox>
+        )}
+      </Field>
+
+      <Field label="Comune">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.city || ""}
+            onChange={(e) => updateField("city", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.city || "-"}</ValueBox>
+        )}
+      </Field>
+
+      <Field label="Provincia">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.province || ""}
+            onChange={(e) => updateField("province", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.province || "-"}</ValueBox>
+        )}
+      </Field>
+    </div>
+
+    <div className="customer-detail-form-grid-2">
+      <Field label="Paese">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.country || ""}
+            onChange={(e) => updateField("country", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.country || "-"}</ValueBox>
+        )}
+      </Field>
+
+      <Field label="Note indirizzo">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.address_notes || ""}
+            onChange={(e) => updateField("address_notes", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.address_notes || "-"}</ValueBox>
+        )}
+      </Field>
+    </div>
+  </section>
+
+  <section className="customer-detail-section-block customer-detail-section-block--divider">
+    <div className="customer-detail-section-title">Dati fiscali</div>
+
+    <div className="customer-detail-form-grid-2">
+      <Field label="Partita IVA">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.vat_number || ""}
+            onChange={(e) => updateField("vat_number", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.vat_number || "-"}</ValueBox>
+        )}
+      </Field>
+
+      <Field label="Codice fiscale">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.tax_code || ""}
+            onChange={(e) => updateField("tax_code", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.tax_code || "-"}</ValueBox>
+        )}
+      </Field>
+    </div>
+
+    <div className="customer-detail-form-grid-2">
+      <Field label="Codice SDI">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.sdi_code || ""}
+            onChange={(e) => updateField("sdi_code", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.sdi_code || "-"}</ValueBox>
+        )}
+      </Field>
+
+      <Field label="IBAN">
+        {editMode ? (
+          <input
+            className="apple-input"
+            value={draft.iban || ""}
+            onChange={(e) => updateField("iban", e.target.value)}
+          />
+        ) : (
+          <ValueBox>{customer.iban || "-"}</ValueBox>
+        )}
+      </Field>
+    </div>
+  </section>
+</div>
+
+        <div className="customer-detail-card customer-detail-card--full">
+          <div className="customer-detail-section-header">
+            <div className="customer-detail-section-title customer-detail-section-title--no-margin">
+              Bici associate
+            </div>
+            <button
+              className="btn-secondary"
+              onClick={() => router.push(`/bikes?customerId=${customerId}`)}
+            >
+              + Aggiungi bici
+            </button>
           </div>
+
+          {bikes.length === 0 ? (
+            <div className="customer-detail-empty">Nessuna bici associata a questo cliente.</div>
+          ) : (
+            <div className="customer-detail-list">
+              {bikes.map((bike) => (
+                <button
+                  key={bike.id}
+                  className="customer-detail-list-row"
+                  onClick={() => router.push(`/bikes/${bike.id}`)}
+                >
+                  <div className="customer-detail-list-main">
+                    <div className="customer-detail-row-title">
+                      {bike.brand || "-"} {bike.model || ""}
+                    </div>
+
+                    <div className="customer-detail-row-sub">
+                      Tipo: {getBikeTypeLabel(bike)} · Telaio: {getBikeSerialLabel(bike)}
+                    </div>
+
+                    <div className="customer-detail-row-meta">
+                      Colore: {bike.color || "-"} · Acquisto: {formatCurrency(bike.purchase_price)}
+                    </div>
+                  </div>
+
+                  <div className="customer-detail-open-tag">Apri bici</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div style={modalContent}>{children}</div>
+        <div className="customer-detail-card customer-detail-card--full">
+          <div className="customer-detail-section-header">
+            <div className="customer-detail-section-title customer-detail-section-title--no-margin">
+              Schede lavoro del cliente
+            </div>
+            <button
+              className="btn-secondary"
+              onClick={() => router.push(`/workorders/new?customerId=${customerId}`)}
+            >
+              + Nuova scheda lavoro
+            </button>
+          </div>
+
+          {workOrders.length === 0 ? (
+            <div className="customer-detail-empty">
+              Nessuna scheda lavoro collegata a questo cliente.
+            </div>
+          ) : (
+            <div className="customer-detail-list">
+              {workOrders.map((wo) => (
+                <button
+                  key={wo.id}
+                  className="customer-detail-list-row"
+                  onClick={() => {
+                    if (wo.status === "closed") {
+                      router.push(`/workorders/${wo.id}/report`);
+                    } else {
+                      router.push(`/workorders/${wo.id}`);
+                    }
+                  }}
+                >
+                  <div className="customer-detail-list-main">
+                    <div className="customer-detail-row-title">{getWorkOrderBikeLabel(wo.bikes)}</div>
+                    <div className="customer-detail-row-sub">{wo.notes || "Scheda lavoro cliente"}</div>
+                    <div className="customer-detail-row-meta">
+                      Data:{" "}
+                      {wo.created_at
+                        ? new Date(wo.created_at).toLocaleDateString("it-IT")
+                        : "-"}
+                    </div>
+                  </div>
+
+                  <div className="customer-detail-list-right">
+                    <span className={getStatusBadgeClass(wo.status)}>
+                      {formatStatus(wo.status)}
+                    </span>
+                    <div className="customer-detail-open-tag">Apri scheda</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
       </div>
+
+      <div className="customer-detail-footer">
+        <button
+          className="customer-detail-danger-btn"
+          onClick={deleteCustomer}
+          disabled={saving || deleting}
+        >
+          {deleting ? "Eliminazione..." : "Elimina cliente"}
+        </button>
+
+        <div className="customer-detail-footer-actions">
+          {!editMode ? (
+            <button className="btn-primary" onClick={() => setEditMode(true)}>
+              Modifica cliente
+            </button>
+          ) : (
+            <>
+              <button className="btn-secondary" onClick={cancelEdit} disabled={saving}>
+                Annulla
+              </button>
+              <button className="btn-primary" onClick={saveCustomer} disabled={saving}>
+                {saving ? "Salvataggio..." : "Salva modifiche"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 }
 
-function FormField({
+function Field({
   label,
   children,
 }: {
@@ -812,502 +923,29 @@ function FormField({
   children: React.ReactNode;
 }) {
   return (
-    <div style={fieldWrap}>
-      <label style={fieldTitle}>{label}</label>
+    <div className="customer-detail-field">
+      <label className="customer-detail-label">{label}</label>
       {children}
     </div>
   );
 }
 
-/* STILI */
-
-const page: React.CSSProperties = {
-  maxWidth: 1200,
-  margin: "0 auto",
-  padding: 32,
-  background: "#f8fafc",
-  minHeight: "100vh",
-};
-
-const topBar: React.CSSProperties = {
-  marginBottom: 18,
-};
-
-const customerHeader: React.CSSProperties = {
-  background: "white",
-  padding: 30,
-  borderRadius: 22,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.07)",
-  marginBottom: 24,
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 20,
-  flexWrap: "wrap",
-};
-
-const customerLeft: React.CSSProperties = {
-  display: "flex",
-  gap: 16,
-  alignItems: "center",
-};
-
-const avatar: React.CSSProperties = {
-  width: 64,
-  height: 64,
-  borderRadius: 18,
-  background: "#dbeafe",
-  color: "#1d4ed8",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 26,
-  fontWeight: 800,
-  flexShrink: 0,
-};
-
-const customerName: React.CSSProperties = {
-  fontSize: 32,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const customerMeta: React.CSSProperties = {
-  fontSize: 15,
-  color: "#64748b",
-  marginTop: 6,
-};
-
-const statsGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  gap: 16,
-  marginBottom: 24,
-};
-
-const statCard: React.CSSProperties = {
-  background: "white",
-  borderRadius: 18,
-  border: "1px solid #e2e8f0",
-  padding: 18,
-  boxShadow: "0 8px 24px rgba(15,23,42,0.04)",
-};
-
-const statLabel: React.CSSProperties = {
-  fontSize: 12,
-  color: "#64748b",
-  marginBottom: 8,
-};
-
-const statValue: React.CSSProperties = {
-  fontSize: 28,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const notesCard: React.CSSProperties = {
-  background: "white",
-  borderRadius: 18,
-  border: "1px solid #e2e8f0",
-  padding: 20,
-  marginBottom: 30,
-};
-
-const sectionMiniTitle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
-  color: "#0f172a",
-  marginBottom: 10,
-};
-
-const notesText: React.CSSProperties = {
-  color: "#475569",
-  lineHeight: 1.5,
-};
-
-const sectionHeader: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 14,
-  flexWrap: "wrap",
-  marginBottom: 20,
-};
-
-const sectionTitle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 24,
-  color: "#0f172a",
-};
-
-const sectionSubtitle: React.CSSProperties = {
-  marginTop: 6,
-  color: "#64748b",
-  fontSize: 14,
-};
-
-const bikeGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))",
-  gap: 18,
-};
-
-const bikeCard: React.CSSProperties = {
-  background: "white",
-  padding: 20,
-  borderRadius: 18,
-  boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
-  border: "1px solid #e5e7eb",
-};
-
-const bikeBrand: React.CSSProperties = {
-  fontWeight: 800,
-  fontSize: 18,
-  marginBottom: 10,
-  color: "#0f172a",
-};
-
-const bikeInfoRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 10,
-  marginTop: 8,
-};
-
-const bikeLabel: React.CSSProperties = {
-  fontSize: 13,
-  color: "#64748b",
-};
-
-const bikeValue: React.CSSProperties = {
-  fontSize: 14,
-  color: "#0f172a",
-  fontWeight: 600,
-  textAlign: "right",
-};
-
-const bikeActions: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  marginTop: 16,
-};
-
-const ordersBox: React.CSSProperties = {
-  background: "white",
-  borderRadius: 18,
-  boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
-  overflow: "hidden",
-  border: "1px solid #e5e7eb",
-};
-
-const table: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-};
-
-const row: React.CSSProperties = {
-  borderTop: "1px solid #eef2f7",
-};
-
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: 14,
-  fontSize: 13,
-  color: "#64748b",
-  background: "#f8fafc",
-};
-
-const td: React.CSSProperties = {
-  padding: 14,
-  color: "#0f172a",
-};
-
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  background: "rgba(15,23,42,0.5)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-  padding: 20,
-  backdropFilter: "blur(4px)",
-};
-
-const modalPremium: React.CSSProperties = {
-  background: "#ffffff",
-  width: "100%",
-  maxWidth: 560,
-  borderRadius: 24,
-  padding: 28,
-  boxShadow: "0 30px 80px rgba(15,23,42,0.28)",
-  border: "1px solid #e2e8f0",
-};
-
-const modalTopBar: React.CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 16,
-  marginBottom: 22,
-};
-
-const modalIcon: React.CSSProperties = {
-  width: 54,
-  height: 54,
-  borderRadius: 16,
-  background: "#dbeafe",
-  color: "#1d4ed8",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 24,
-  flexShrink: 0,
-};
-
-const modalPremiumTitle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 24,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const modalPremiumSubtitle: React.CSSProperties = {
-  margin: "8px 0 0 0",
-  color: "#64748b",
-  fontSize: 14,
-  lineHeight: 1.5,
-};
-
-const modalContent: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 16,
-};
-
-const fieldWrap: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-};
-
-const fieldTitle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-  color: "#334155",
-};
-
-const inputPremium: React.CSSProperties = {
-  width: "100%",
-  padding: "13px 14px",
-  borderRadius: 14,
-  border: "1px solid #dbe2ea",
-  fontSize: 14,
-  outline: "none",
-  background: "#fff",
-};
-
-const textareaPremium: React.CSSProperties = {
-  width: "100%",
-  minHeight: 120,
-  padding: "13px 14px",
-  borderRadius: 14,
-  border: "1px solid #dbe2ea",
-  fontSize: 14,
-  outline: "none",
-  resize: "vertical",
-  background: "#fff",
-};
-
-const modalFooter: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 12,
-  marginTop: 8,
-  flexWrap: "wrap",
-};
-
-const blueBtn: React.CSSProperties = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "10px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const greenBtn: React.CSSProperties = {
-  background: "#22c55e",
-  color: "white",
-  border: "none",
-  padding: "10px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const redBtn: React.CSSProperties = {
-  background: "#ef4444",
-  color: "white",
-  border: "none",
-  padding: "10px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const grayBtn: React.CSSProperties = {
-  background: "#e5e7eb",
-  border: "none",
-  padding: "10px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const secondaryBtn: React.CSSProperties = {
-  background: "#fff",
-  color: "#0f172a",
-  border: "1px solid #dbe2ea",
-  padding: "10px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const blueBtnSmall: React.CSSProperties = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "8px 12px",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const primaryBtnModal: React.CSSProperties = {
-  background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
-  color: "#fff",
-  border: "none",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 800,
-  boxShadow: "0 12px 24px rgba(37,99,235,0.2)",
-};
-
-const successBtnModal: React.CSSProperties = {
-  background: "linear-gradient(135deg,#22c55e,#16a34a)",
-  color: "#fff",
-  border: "none",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 800,
-  boxShadow: "0 12px 24px rgba(34,197,94,0.2)",
-};
-
-const dangerBtnModal: React.CSSProperties = {
-  background: "linear-gradient(135deg,#ef4444,#dc2626)",
-  color: "#fff",
-  border: "none",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 800,
-  boxShadow: "0 12px 24px rgba(239,68,68,0.2)",
-};
-
-const secondaryBtnModal: React.CSSProperties = {
-  background: "#f1f5f9",
-  color: "#0f172a",
-  border: "1px solid #dbe2ea",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const dangerBox: React.CSSProperties = {
-  background: "#fff1f2",
-  border: "1px solid #fecdd3",
-  color: "#9f1239",
-  padding: 16,
-  borderRadius: 14,
-  lineHeight: 1.5,
-  fontSize: 14,
-};
-
-const emptyBox: React.CSSProperties = {
-  background: "white",
-  border: "1px dashed #cbd5e1",
-  borderRadius: 18,
-  padding: 28,
-  textAlign: "center",
-  color: "#64748b",
-};
-
-const toastStyle: React.CSSProperties = {
-  position: "fixed",
-  top: 24,
-  right: 24,
-  zIndex: 1100,
-  padding: "14px 18px",
-  borderRadius: 14,
-  fontWeight: 700,
-  boxShadow: "0 12px 30px rgba(15,23,42,0.16)",
-};
-
-const toastSuccess: React.CSSProperties = {
-  background: "#ecfdf5",
-  color: "#065f46",
-  border: "1px solid #a7f3d0",
-};
-
-const toastError: React.CSSProperties = {
-  background: "#fff1f2",
-  color: "#9f1239",
-  border: "1px solid #fecdd3",
-};
-
-const toastInfo: React.CSSProperties = {
-  background: "#eff6ff",
-  color: "#1d4ed8",
-  border: "1px solid #bfdbfe",
-};
-
-function statusBadge(status: any): React.CSSProperties {
-  if (status === "open") {
-    return {
-      background: "#e0f2fe",
-      color: "#075985",
-      padding: "5px 10px",
-      borderRadius: 999,
-      fontWeight: 700,
-      fontSize: 12,
-    };
-  }
-
-  if (status === "working") {
-    return {
-      background: "#fff7ed",
-      color: "#c2410c",
-      padding: "5px 10px",
-      borderRadius: 999,
-      fontWeight: 700,
-      fontSize: 12,
-    };
-  }
-
-  return {
-    background: "#e5e7eb",
-    color: "#374151",
-    padding: "5px 10px",
-    borderRadius: 999,
-    fontWeight: 700,
-    fontSize: 12,
-  };
+function ValueBox({
+  children,
+  multiline = false,
+}: {
+  children: React.ReactNode;
+  multiline?: boolean;
+}) {
+  return (
+    <div
+      className={
+        multiline
+          ? "customer-detail-value-box customer-detail-value-box--multiline"
+          : "customer-detail-value-box"
+      }
+    >
+      {children}
+    </div>
+  );
 }

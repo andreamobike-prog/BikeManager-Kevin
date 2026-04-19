@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import { supabase } from "../../../../lib/supabase";
-import html2pdf from "html2pdf.js";
+import { useParams, useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { Printer, Download, Mail, Archive } from "lucide-react";
 
 type Customer = {
   name?: string | null;
@@ -15,13 +15,20 @@ type Bike = {
   brand?: string | null;
   model?: string | null;
   serial?: string | null;
+  serial_number?: string | null;
   color?: string | null;
 };
 
 type WorkOrder = {
   id: string;
+  status?: string | null;
   notes?: string | null;
   created_at?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  not_invoiced?: boolean | null;
+  archived?: boolean | null;
+  archived_at?: string | null;
   customers?: Customer | null;
   bikes?: Bike[] | null;
 };
@@ -31,6 +38,7 @@ type Product = {
   title?: string | null;
   ean?: string | null;
   price_b2c?: number | null;
+  fatturabile?: boolean | null;
 };
 
 type Part = {
@@ -44,30 +52,39 @@ type Part = {
 
 type Service = {
   id: string;
+  work_order_id: string;
   title: string;
   hours?: number | null;
   notes?: string | null;
   custom_price?: number | null;
   service_date?: string | null;
+  billable?: boolean | null;
 };
 
 type ComputedPart = Part & {
   productTitle: string;
   productEan: string;
-  originalPrice: number;
   appliedPrice: number;
-  modified: boolean;
   rowTotal: number;
+  fatturabile: boolean;
 };
 
-type ComputedService = Service & {
+type ComputedService = {
+  id: string;
+  title: string;
+  hours?: number | null;
+  service_date?: string | null;
   calculatedPrice: number;
   appliedPrice: number;
   modified: boolean;
+  billable?: boolean;
 };
+
+type ToastType = "success" | "error" | "info";
 
 export default function WorkOrderReport() {
   const params = useParams();
+  const router = useRouter();
   const id = String(params.id);
 
   const [order, setOrder] = useState<WorkOrder | null>(null);
@@ -76,23 +93,46 @@ export default function WorkOrderReport() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState("");
+  const [notInvoiced, setNotInvoiced] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+
+  const [toast, setToast] = useState<{
+    type: ToastType;
+    message: string;
+  } | null>(null);
+
   const hourlyRate = 35;
+
+  useEffect(() => {
+    if (id) {
+      loadData();
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   async function loadData() {
     setLoading(true);
 
     const [
-      { data: orderData },
-      { data: productData },
-      { data: partsData },
-      { data: servicesData },
+      { data: orderData, error: orderError },
+      { data: productData, error: productError },
+      { data: partsData, error: partsError },
+      { data: servicesData, error: servicesError },
     ] = await Promise.all([
       supabase
         .from("work_orders")
         .select(`*, customers(*), bikes(*)`)
         .eq("id", id)
         .single(),
-      supabase.from("products").select("*"),
+      supabase.from("products").select("id,title,ean,price_b2c,fatturabile"),
       supabase.from("work_order_parts").select("*").eq("work_order_id", id),
       supabase
         .from("work_order_services")
@@ -101,18 +141,52 @@ export default function WorkOrderReport() {
         .order("service_date", { ascending: true }),
     ]);
 
-    setOrder((orderData as WorkOrder) || null);
+    if (orderError) {
+      console.error(orderError);
+      setToast({
+        type: "error",
+        message: `Errore caricamento scheda: ${orderError.message}`,
+      });
+    }
+
+    if (productError) {
+      console.error(productError);
+      setToast({
+        type: "error",
+        message: `Errore caricamento prodotti: ${productError.message}`,
+      });
+    }
+
+    if (partsError) {
+      console.error(partsError);
+      setToast({
+        type: "error",
+        message: `Errore caricamento ricambi: ${partsError.message}`,
+      });
+    }
+
+    if (servicesError) {
+      console.error(servicesError);
+      setToast({
+        type: "error",
+        message: `Errore caricamento servizi: ${servicesError.message}`,
+      });
+    }
+
+    const workOrder = (orderData as WorkOrder) || null;
+    setOrder(workOrder);
     setProducts((productData as Product[]) || []);
     setParts((partsData as Part[]) || []);
     setServices((servicesData as Service[]) || []);
+
+    if (workOrder) {
+      setInvoiceNumber(workOrder.invoice_number || "");
+      setInvoiceDate(workOrder.invoice_date || "");
+      setNotInvoiced(Boolean(workOrder.not_invoiced));
+    }
+
     setLoading(false);
   }
-
-  useEffect(() => {
-    if (id) {
-      loadData();
-    }
-  }, [id]);
 
   const productsMap = useMemo(() => {
     const map: Record<string, Product> = {};
@@ -125,54 +199,52 @@ export default function WorkOrderReport() {
   const partsComputed: ComputedPart[] = useMemo(() => {
     return parts.map((p) => {
       const product = productsMap[p.product_id];
-      const originalPrice = p.price_snapshot ?? product?.price_b2c ?? 0;
-      const appliedPrice = p.custom_price ?? originalPrice;
-      const modified =
-        p.custom_price !== null &&
-        p.custom_price !== undefined &&
-        Number(p.custom_price) !== Number(originalPrice);
+      const appliedPrice = p.custom_price ?? (p.price_snapshot ?? product?.price_b2c ?? 0);
 
       return {
         ...p,
         productTitle: product?.title || "-",
         productEan: product?.ean || "-",
-        originalPrice,
         appliedPrice,
-        modified,
         rowTotal: appliedPrice * p.quantity,
+        fatturabile: Boolean(product?.fatturabile ?? true),
       };
     });
   }, [parts, productsMap]);
 
   const servicesComputed: ComputedService[] = useMemo(() => {
     return services.map((s) => {
-      const calculatedPrice = (s.hours || 0) * hourlyRate;
-      const appliedPrice = s.custom_price ?? calculatedPrice;
+      const hours = Number(s.hours || 0);
+      const hourlyApplied = s.custom_price ?? hourlyRate;
+      const calculatedPrice = hours * hourlyApplied;
       const modified =
         s.custom_price !== null &&
         s.custom_price !== undefined &&
-        Number(s.custom_price) !== Number(calculatedPrice);
+        Number(s.custom_price) !== Number(hourlyRate);
 
       return {
         ...s,
+        billable: Boolean(s.billable ?? true),
         calculatedPrice,
-        appliedPrice,
+        appliedPrice: hourlyApplied,
         modified,
       };
     });
-  }, [services]);
+  }, [services, hourlyRate]);
 
   const partsTotal = partsComputed.reduce((acc, p) => acc + p.rowTotal, 0);
-
   const serviceTotal = servicesComputed.reduce(
     (acc, s) => acc + s.appliedPrice,
     0
   );
-
   const total = partsTotal + serviceTotal;
 
   const firstBike = order?.bikes?.[0] ?? null;
   const bikeName = `${firstBike?.brand || ""} ${firstBike?.model || ""}`.trim();
+
+  const nonBillableParts = useMemo(() => {
+    return partsComputed.filter((p) => !p.fatturabile || !p.billable);
+  }, [partsComputed]);
 
   function formatCurrency(value: number | null | undefined) {
     return new Intl.NumberFormat("it-IT", {
@@ -190,24 +262,51 @@ export default function WorkOrderReport() {
     }).format(new Date(value));
   }
 
-  function downloadPDF() {
+  async function downloadPDF() {
     const element = document.getElementById("report");
-
     if (!element) return;
 
-    const opt = {
-      margin: 10,
-      filename: `report-${order?.id || "workorder"}.pdf`,
-      image: { type: "jpeg" as const, quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: {
-        unit: "mm" as const,
-        format: "a4" as const,
-        orientation: "portrait" as const,
-      },
-    };
+    const buttons = element.querySelector(".print-buttons") as HTMLElement | null;
+    const previousDisplay = buttons?.style.display ?? "";
 
-    html2pdf().set(opt).from(element).save();
+    if (buttons) {
+      buttons.style.display = "none";
+    }
+
+    try {
+      const { default: html2pdf } = await import("html2pdf.js");
+
+      const opt = {
+        margin: [10, 10, 10, 10] as [number, number, number, number],
+        filename: `report-${order?.id || "workorder"}.pdf`,
+        image: { type: "jpeg" as const, quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+        },
+        jsPDF: {
+          unit: "mm" as const,
+          format: "a4" as const,
+          orientation: "portrait" as const,
+        },
+        pagebreak: {
+          mode: ["css", "legacy"],
+          avoid: [
+            ".report-box",
+            ".report-block",
+            ".report-summary-box",
+            ".report-total-box",
+            ".report-signatures",
+          ],
+        },
+      };
+
+      await html2pdf().set(opt).from(element).save();
+    } finally {
+      if (buttons) {
+        buttons.style.display = previousDisplay;
+      }
+    }
   }
 
   function openEmailDraft() {
@@ -239,183 +338,255 @@ export default function WorkOrderReport() {
     window.location.href = mailto;
   }
 
+  async function archiveWorkOrder() {
+    if (!order) return;
+
+    setArchiving(true);
+
+    const archivePayload = {
+      archived: true,
+      archived_at: new Date().toISOString(),
+      invoice_number: invoiceNumber.trim() || null,
+      invoice_date: invoiceDate || null,
+      status: "closed",
+    };
+
+    const { error: archiveError } = await supabase
+      .from("work_orders")
+      .update(archivePayload)
+      .eq("id", id);
+
+    if (archiveError) {
+      console.error(archiveError);
+      setToast({
+        type: "error",
+        message: `Errore archiviazione: ${archiveError.message}`,
+      });
+      setArchiving(false);
+      return;
+    }
+
+    if (nonBillableParts.length > 0) {
+      const rows = nonBillableParts.map((p) => ({
+        work_order_id: id,
+        product_id: p.product_id,
+        inventory_movement_id: null,
+        description: p.productTitle,
+        quantity: p.quantity,
+        unit_value: p.appliedPrice,
+        total_value: p.rowTotal,
+        handled: false,
+        notes: p.fatturabile
+          ? "Ricambio non fatturato per flag billable della riga"
+          : "Ricambio non fatturabile da prodotto",
+      }));
+
+      const { error: insertError } = await supabase
+        .from("non_billable_work_order_items")
+        .insert(rows);
+
+      if (insertError) {
+        console.error(insertError);
+        setToast({
+          type: "error",
+          message: `Scheda archiviata ma errore salvataggio ricambi non fatturabili: ${insertError.message}`,
+        });
+        setArchiving(false);
+        return;
+      }
+    }
+
+    setOrder((prev) =>
+      prev
+        ? {
+          ...prev,
+          ...archivePayload,
+        }
+        : prev
+    );
+
+    setShowArchiveModal(false);
+    setArchiving(false);
+
+    setToast({
+      type: "success",
+      message: "Scheda archiviata correttamente.",
+    });
+
+    setTimeout(() => {
+      router.push("/workorders/archive");
+    }, 800);
+  }
+
   if (!order || loading) {
-    return <div style={{ padding: 40 }}>Caricamento...</div>;
+    return <div className="report-loading">Caricamento...</div>;
   }
 
   return (
     <div id="report" className="report-container">
-      <style jsx global>{`
-        @page {
-          size: A4;
-          margin: 18mm;
-        }
 
-        body {
-          background: #f3f4f6;
-          font-family: Inter, Arial, Helvetica, sans-serif;
-        }
+      {toast && (
+        <div
+          className={`report-toast ${toast.type === "success"
+            ? "report-toast--success"
+            : toast.type === "error"
+              ? "report-toast--error"
+              : "report-toast--info"
+            }`}
+        >
+          {toast.message}
+        </div>
+      )}
 
-        .report-container {
-          max-width: 980px;
-          margin: 28px auto;
-          padding: 36px;
-          background: white;
-          color: #111827;
-          border-radius: 20px;
-          box-shadow: 0 20px 50px rgba(0, 0, 0, 0.08);
-        }
+      {showArchiveModal && (
+        <div className="report-modal-overlay">
+          <div className="report-modal-card">
+            <div className="report-modal-header">
+              <div>
+                <div className="report-modal-eyebrow">Chiusura amministrativa</div>
+                <h2 className="report-modal-title">Fattura / Archivia scheda</h2>
+                <p className="report-modal-subtitle">
+                  Inserisci i dati fattura oppure marca la pratica come non fatturata.
+                </p>
+              </div>
 
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-bottom: 28px;
-        }
+              <button
+                onClick={() => setShowArchiveModal(false)}
+                className="report-modal-close"
+                disabled={archiving}
+              >
+                ✕
+              </button>
+            </div>
 
-        th {
-          border-bottom: 2px solid #111827;
-          padding: 10px 8px;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-          color: #475569;
-          text-align: left;
-        }
+            <div className="report-modal-body">
+              <label className="report-field-label">Numero fattura</label>
+              <input
+                className={`report-input ${notInvoiced ? "report-input--disabled" : ""}`}
+                value={invoiceNumber}
+                onChange={(e) => setInvoiceNumber(e.target.value)}
+                disabled={notInvoiced || archiving}
+                placeholder="Es. 124/2026"
+              />
 
-        td {
-          border-bottom: 1px solid #e5e7eb;
-          padding: 10px 8px;
-          font-size: 14px;
-          vertical-align: top;
-        }
+              <label className="report-field-label">Data fattura</label>
+              <input
+                type="date"
+                className={`report-input ${notInvoiced ? "report-input--disabled" : ""}`}
+                value={invoiceDate}
+                onChange={(e) => setInvoiceDate(e.target.value)}
+                disabled={notInvoiced || archiving}
+              />
 
-        @media print {
-          .print-buttons {
-            display: none !important;
-          }
+            </div>
 
-          body {
-            background: white;
-          }
+            <div className="report-modal-footer">
+              <button
+                className="report-secondary-btn"
+                onClick={() => setShowArchiveModal(false)}
+                disabled={archiving}
+              >
+                Annulla
+              </button>
 
-          .report-container {
-            margin: 0;
-            padding: 0;
-            box-shadow: none;
-            border-radius: 0;
-            max-width: 100%;
-          }
-        }
-      `}</style>
+              <button
+                className="report-primary-btn"
+                onClick={archiveWorkOrder}
+                disabled={archiving}
+              >
+                {archiving ? "Archiviazione..." : "Conferma e archivia"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: 20,
-          marginBottom: 28,
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="report-topbar">
         <div>
-          <img src="/bigalogo.png" alt="Biga Bike" style={{ height: 64 }} />
+          <img src="/kc-logo.png" alt="KC" className="report-logo" />
         </div>
 
-        <div style={{ textAlign: "right" }}>
-          <h1 style={{ margin: 0, fontSize: 28 }}>Scheda lavoro</h1>
-          <div style={{ marginTop: 8, color: "#64748b" }}>
-            ID lavoro: {order.id}
-          </div>
-          <div style={{ color: "#64748b" }}>
+        <div className="report-topbar-meta">
+          <h1 className="report-title">Scheda lavoro</h1>
+          <div className="report-meta-line">ID lavoro: {order.id}</div>
+          <div className="report-meta-line">
             Data report: {formatDate(new Date().toISOString())}
+          </div>
+          <div className="report-status-row">
+            <span
+              className={`report-pill ${order.archived ? "report-pill--gray" : "report-pill--green"
+                }`}
+            >
+              {order.archived ? "Archiviata" : "Chiusa / Da amministrare"}
+            </span>
           </div>
         </div>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.3fr 1fr",
-          gap: 18,
-          marginBottom: 28,
-        }}
-      >
-        <div
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 16,
-            padding: 18,
-            background: "#fafafa",
-          }}
-        >
-          <div style={boxTitle}>Cliente</div>
-          <div style={infoLine}>
+      <div className="report-grid">
+        <div className="report-box report-box--soft">
+          <div className="report-box-title">Cliente</div>
+          <div className="report-info-line">
             <strong>Nome:</strong> {order.customers?.name || "-"}
           </div>
-          <div style={infoLine}>
+          <div className="report-info-line">
             <strong>Telefono:</strong> {order.customers?.phone || "-"}
           </div>
-          <div style={infoLine}>
+          <div className="report-info-line">
             <strong>Email:</strong> {order.customers?.email || "-"}
           </div>
         </div>
 
-        <div
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 16,
-            padding: 18,
-            background: "#fafafa",
-          }}
-        >
-          <div style={boxTitle}>Bici</div>
-          <div style={infoLine}>
+        <div className="report-box report-box--soft">
+          <div className="report-box-title">Bici</div>
+          <div className="report-info-line">
             <strong>Modello:</strong> {firstBike?.brand || "-"}{" "}
             {firstBike?.model || ""}
           </div>
-          <div style={infoLine}>
-            <strong>Telaio:</strong> {firstBike?.serial || "-"}
+          <div className="report-info-line">
+            <strong>Telaio:</strong> {firstBike?.serial_number || firstBike?.serial || "-"}
           </div>
-          <div style={infoLine}>
+          <div className="report-info-line">
             <strong>Colore:</strong> {firstBike?.color || "-"}
           </div>
         </div>
       </div>
 
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 16,
-          padding: 18,
-          marginBottom: 32,
-          background: "#fff",
-        }}
-      >
-        <div style={boxTitle}>Note scheda</div>
-        <div style={{ color: "#334155", lineHeight: 1.5 }}>
-          {order.notes || "Nessuna nota inserita."}
+      <div className="report-block">
+        <div className="report-box-title">Note scheda</div>
+        <div className="report-text">{order.notes || "Nessuna nota inserita."}</div>
+      </div>
+
+      <div className="report-block report-block--muted">
+        <div className="report-box-title">Dati amministrativi</div>
+        <div className="report-info-line">
+          <strong>Numero fattura:</strong> {order.invoice_number || "-"}
+        </div>
+        <div className="report-info-line">
+          <strong>Data fattura:</strong> {formatDate(order.invoice_date)}
+        </div>
+        <div className="report-info-line">
+          <strong>Non fatturato:</strong> {order.not_invoiced ? "Sì" : "No"}
         </div>
       </div>
 
-      <h3 style={sectionTitle}>Ricambi utilizzati</h3>
+      <h3 className="report-section-title">Ricambi utilizzati</h3>
 
-      <table>
+      <table className="report-table">
         <thead>
           <tr>
             <th>Prodotto</th>
             <th>Q.tà</th>
-            <th>Listino</th>
-            <th>Prezzo applicato</th>
-            <th>Indicatore interno</th>
+            <th>Prezzo unitario</th>
             <th>Totale riga</th>
+            <th>Indicatore interno</th>
           </tr>
         </thead>
 
         <tbody>
           {partsComputed.length === 0 ? (
             <tr>
-              <td colSpan={6} style={{ textAlign: "center", color: "#64748b" }}>
+              <td colSpan={5} className="report-table-empty">
                 Nessun ricambio inserito.
               </td>
             </tr>
@@ -423,58 +594,28 @@ export default function WorkOrderReport() {
             partsComputed.map((p) => (
               <tr key={p.id}>
                 <td>
-                  <div style={{ fontWeight: 700 }}>{p.productTitle}</div>
-                  <div style={{ fontSize: 12, color: "#64748b" }}>
-                    EAN: {p.productEan}
-                  </div>
+                  <div className="report-product-title">{p.productTitle}</div>
+                  <div className="report-product-meta">EAN: {p.productEan}</div>
                 </td>
 
-                <td style={{ textAlign: "center" }}>{p.quantity}</td>
+                <td>{p.quantity}</td>
 
-                <td style={{ textAlign: "right" }}>
-                  {formatCurrency(p.originalPrice)}
+                <td>
+                  {formatCurrency(p.appliedPrice)}
                 </td>
 
-                <td style={{ textAlign: "right" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-end",
-                      gap: 4,
-                    }}
-                  >
-                    {p.modified && (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: "#b45309",
-                          background: "#fef3c7",
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          fontWeight: 700,
-                        }}
-                      >
-                        Prezzo modificato
-                      </span>
-                    )}
-                    <strong>{formatCurrency(p.appliedPrice)}</strong>
-                  </div>
+                <td>
+                  {p.fatturabile && p.billable ? formatCurrency(p.rowTotal) : "-"}
                 </td>
 
-                <td style={{ textAlign: "center" }}>
-                  <span
-                    style={{
-                      ...pillBase,
-                      ...(p.billable ? pillGreen : pillGray),
-                    }}
-                  >
-                    {p.billable ? "Fatturabile" : "Interno"}
-                  </span>
-                </td>
-
-                <td style={{ textAlign: "right" }}>
-                  <strong>{formatCurrency(p.rowTotal)}</strong>
+                <td className="report-cell-center">
+                  {p.fatturabile && p.billable ? (
+                    <span className="report-pill report-pill--green">
+                      Fatturabile
+                    </span>
+                  ) : (
+                    "-"
+                  )}
                 </td>
               </tr>
             ))
@@ -482,24 +623,24 @@ export default function WorkOrderReport() {
         </tbody>
       </table>
 
-      <h3 style={sectionTitle}>Interventi officina</h3>
+      <h3 className="report-section-title">Interventi officina</h3>
 
-      <table>
+      <table className="report-table">
         <thead>
           <tr>
             <th>Data</th>
             <th>Intervento</th>
             <th>Ore</th>
-            <th>Prezzo calcolato</th>
-            <th>Prezzo applicato</th>
-            <th>Note</th>
+            <th>Prezzo orario</th>
+            <th>Totale fatturabile</th>
+            <th>Indicatore interno</th>
           </tr>
         </thead>
 
         <tbody>
           {servicesComputed.length === 0 ? (
             <tr>
-              <td colSpan={6} style={{ textAlign: "center", color: "#64748b" }}>
+              <td colSpan={6} className="report-table-empty">
                 Nessun intervento inserito.
               </td>
             </tr>
@@ -507,212 +648,142 @@ export default function WorkOrderReport() {
             servicesComputed.map((s) => (
               <tr key={s.id}>
                 <td>{formatDate(s.service_date)}</td>
-                <td style={{ fontWeight: 700 }}>{s.title}</td>
-                <td style={{ textAlign: "center" }}>{s.hours || 0}</td>
-                <td style={{ textAlign: "right" }}>
-                  {formatCurrency(s.calculatedPrice)}
+                <td>{s.title}</td>
+                <td>{s.hours || 0}</td>
+                <td>{formatCurrency(s.appliedPrice)}</td>
+                <td>{formatCurrency(s.calculatedPrice)}</td>
+                <td className="report-cell-center">
+                  {Boolean(s.billable ?? true) ? (
+                    <span className="report-pill report-pill--green">
+                      Fatturabile
+                    </span>
+                  ) : (
+                    "-"
+                  )}
                 </td>
-                <td style={{ textAlign: "right" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-end",
-                      gap: 4,
-                    }}
-                  >
-                    {s.modified && (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: "#b45309",
-                          background: "#fef3c7",
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          fontWeight: 700,
-                        }}
-                      >
-                        Prezzo modificato
-                      </span>
-                    )}
-                    <strong>{formatCurrency(s.appliedPrice)}</strong>
-                  </div>
-                </td>
-                <td>{s.notes || "-"}</td>
               </tr>
             ))
           )}
         </tbody>
       </table>
 
-      <div
-        style={{
-          marginTop: 14,
-          borderTop: "2px solid #111827",
-          paddingTop: 20,
-          display: "grid",
-          gridTemplateColumns: "1fr 320px",
-          gap: 18,
-          alignItems: "start",
-        }}
-      >
-        <div
-          style={{
-            background: "#f8fafc",
-            border: "1px solid #e5e7eb",
-            borderRadius: 16,
-            padding: 16,
-          }}
-        >
-          <div style={boxTitle}>Riepilogo report</div>
-          <div style={summaryRow}>
+      <div className="report-summary">
+        <div className="report-summary-box">
+          <div className="report-box-title">Riepilogo report</div>
+
+          <div className="report-summary-row">
             <span>Ricambi</span>
-            <strong>{formatCurrency(partsTotal)}</strong>
+            <strong>
+              {partsComputed.some((p) => p.fatturabile && p.billable)
+                ? formatCurrency(
+                  partsComputed.reduce((acc, p) => {
+                    return p.fatturabile && p.billable
+                      ? acc + Number(p.rowTotal || 0)
+                      : acc;
+                  }, 0)
+                )
+                : "-"}
+            </strong>
           </div>
-          <div style={summaryRow}>
+
+          <div className="report-summary-row">
             <span>Manodopera</span>
-            <strong>{formatCurrency(serviceTotal)}</strong>
+            <strong>
+              {servicesComputed.some((s) => Boolean(s.billable ?? true))
+                ? formatCurrency(
+                  servicesComputed.reduce((acc, s) => {
+                    return Boolean(s.billable ?? true)
+                      ? acc + Number(s.calculatedPrice || 0)
+                      : acc;
+                  }, 0)
+                )
+                : "-"}
+            </strong>
+          </div>
+
+          <div className="report-summary-row">
+            <span>Ricambi non fatturabili</span>
+            <strong>-</strong>
           </div>
         </div>
 
-        <div
-          style={{
-            background: "#eff6ff",
-            border: "1px solid #bfdbfe",
-            borderRadius: 16,
-            padding: 18,
-          }}
-        >
-          <div style={{ fontSize: 13, color: "#1d4ed8", marginBottom: 8 }}>
-            Totale cliente
-          </div>
-          <div style={{ fontSize: 30, fontWeight: 800, color: "#0f172a" }}>
-            {formatCurrency(total)}
+        <div className="report-total-box">
+          <div className="report-total-label">Totale fatturabile</div>
+          <div className="report-total-value">
+            {formatCurrency(
+              partsComputed.reduce((acc, p) => {
+                return p.fatturabile && p.billable
+                  ? acc + Number(p.rowTotal || 0)
+                  : acc;
+              }, 0) +
+              servicesComputed.reduce((acc, s) => {
+                return Boolean(s.billable ?? true)
+                  ? acc + Number(s.calculatedPrice || 0)
+                  : acc;
+              }, 0)
+            )}
           </div>
         </div>
       </div>
 
-      <div
-        style={{
-          marginTop: 60,
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 30,
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <p style={{ marginBottom: 36 }}>Firma cliente</p>
-          <div style={{ borderBottom: "1px solid black", height: 36 }} />
+      <div className="report-signatures">
+        <div className="report-signature-col">
+          <p className="report-signature-label">Firma cliente</p>
+          <div className="report-signature-line" />
         </div>
 
-        <div style={{ flex: 1 }}>
-          <p style={{ marginBottom: 36 }}>Firma officina</p>
-          <div style={{ borderBottom: "1px solid black", height: 36 }} />
+        <div className="report-signature-col">
+          <p className="report-signature-label">Firma officina</p>
+          <div className="report-signature-line" />
         </div>
       </div>
 
-      <div
-        className="print-buttons"
-        style={{
-          marginTop: 40,
-          display: "flex",
-          justifyContent: "center",
-          gap: 14,
-          flexWrap: "wrap",
-        }}
-      >
-        <button onClick={() => window.print()} style={actionBlueBtn}>
-          🖨 Stampa
-        </button>
+      <div className="print-buttons report-actions">
+        <div className="report-actions-left">
+          <button
+            className="report-action-btn report-action-btn--close"
+            onClick={() => router.push(`/workorders/${order.id}`)}
+          >
+            <span>Chiudi</span>
+          </button>
+        </div>
 
-        <button onClick={downloadPDF} style={actionGreenBtn}>
-          📄 Scarica PDF
-        </button>
+        <div className="report-actions-right">
+          <button
+            className="report-action-btn report-action-btn--print"
+            onClick={() => window.print()}
+          >
+            <Printer size={16} strokeWidth={2.2} />
+            <span>Stampa</span>
+          </button>
 
-        <button onClick={openEmailDraft} style={actionGrayBtn}>
-          ✉️ Invia email
-        </button>
+          <button
+            className="report-action-btn report-action-btn--download"
+            onClick={downloadPDF}
+          >
+            <Download size={16} strokeWidth={2.2} />
+            <span>Scarica PDF</span>
+          </button>
+
+          <button
+            className="report-action-btn report-action-btn--email"
+            onClick={openEmailDraft}
+          >
+            <Mail size={16} strokeWidth={2.2} />
+            <span>Invia email</span>
+          </button>
+
+          {!order.archived && (
+            <button
+              className="report-action-btn report-action-btn--archive"
+              onClick={() => setShowArchiveModal(true)}
+            >
+              <Archive size={16} strokeWidth={2.2} />
+              <span>Fattura / Archivia</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-
-const boxTitle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
-  color: "#0f172a",
-  marginBottom: 10,
-};
-
-const infoLine: React.CSSProperties = {
-  color: "#334155",
-  marginBottom: 6,
-  lineHeight: 1.5,
-};
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: 20,
-  marginBottom: 12,
-  marginTop: 0,
-  color: "#0f172a",
-};
-
-const summaryRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 10,
-  padding: "8px 0",
-  borderBottom: "1px solid #e5e7eb",
-  color: "#0f172a",
-};
-
-const pillBase: React.CSSProperties = {
-  display: "inline-block",
-  padding: "4px 10px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 700,
-};
-
-const pillGreen: React.CSSProperties = {
-  background: "#dcfce7",
-  color: "#166534",
-};
-
-const pillGray: React.CSSProperties = {
-  background: "#e5e7eb",
-  color: "#374151",
-};
-
-const actionBlueBtn: React.CSSProperties = {
-  background: "#2d7ef7",
-  color: "white",
-  border: "none",
-  padding: "12px 24px",
-  fontSize: 15,
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const actionGreenBtn: React.CSSProperties = {
-  background: "#1e9c57",
-  color: "white",
-  border: "none",
-  padding: "12px 24px",
-  fontSize: 15,
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const actionGrayBtn: React.CSSProperties = {
-  background: "#475569",
-  color: "white",
-  border: "none",
-  padding: "12px 24px",
-  fontSize: 15,
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};

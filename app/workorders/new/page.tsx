@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../../lib/supabase";
-import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Search, X } from "lucide-react";
 
 type Customer = {
   id: string;
@@ -24,6 +25,12 @@ type ToastType = "success" | "error" | "info";
 
 export default function NewWorkOrderPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const customerIdFromQuery =
+    searchParams.get("customer_id") ||
+    searchParams.get("customerId") ||
+    "";
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState("");
@@ -37,6 +44,7 @@ export default function NewWorkOrderPage() {
   const [loadingCustomers, setLoadingCustomers] = useState(true);
   const [loadingBikes, setLoadingBikes] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [allowCustomerPrefill, setAllowCustomerPrefill] = useState(true);
 
   const [toast, setToast] = useState<{
     type: ToastType;
@@ -46,6 +54,25 @@ export default function NewWorkOrderPage() {
   useEffect(() => {
     loadCustomers();
   }, []);
+
+  useEffect(() => {
+    if (!allowCustomerPrefill) return;
+    if (loadingCustomers) return;
+    if (!customerIdFromQuery) return;
+    if (selectedCustomer) return;
+
+    const customerFromQuery = customers.find((c) => c.id === customerIdFromQuery);
+
+    if (!customerFromQuery) return;
+
+    selectCustomer(customerFromQuery);
+  }, [
+    allowCustomerPrefill,
+    loadingCustomers,
+    customerIdFromQuery,
+    customers,
+    selectedCustomer,
+  ]);
 
   useEffect(() => {
     if (!toast) return;
@@ -103,10 +130,18 @@ export default function NewWorkOrderPage() {
   }
 
   async function createWorkOrder() {
-    if (!selectedCustomer || !selectedBike) {
+    if (!selectedCustomer) {
       setToast({
         type: "error",
-        message: "Seleziona cliente e bici prima di creare la scheda.",
+        message: "Seleziona cliente prima di creare la scheda.",
+      });
+      return;
+    }
+
+    if (!selectedBike) {
+      setToast({
+        type: "error",
+        message: "Seleziona bici prima di creare la scheda.",
       });
       return;
     }
@@ -160,97 +195,126 @@ export default function NewWorkOrderPage() {
     <div style={page}>
       {toast && (
         <div
-          style={{
-            ...toastStyle,
-            ...(toast.type === "success"
-              ? toastSuccess
+          className={`workorder-new-toast ${toast.type === "success"
+              ? "workorder-new-toast--success"
               : toast.type === "error"
-              ? toastError
-              : toastInfo),
-          }}
+                ? "workorder-new-toast--error"
+                : "workorder-new-toast--info"
+            }`}
         >
           {toast.message}
         </div>
       )}
 
-      <div style={container}>
-        <div style={topBar}>
-          <button style={backBtn} onClick={() => router.push("/workorders")}>
+      <div className="workorder-new-shell">
+        <div className="workorder-new-topbar">
+          <button className="btn-secondary workorder-new-back-btn" onClick={() => router.push("/workorders")}>
             ← Torna alle schede
           </button>
         </div>
 
-        <div style={hero}>
+        <div className="workorder-new-hero">
           <div>
-            <div style={eyebrow}>Officina</div>
-            <h1 style={title}>Nuova scheda lavoro</h1>
-            <p style={subtitle}>
+            <div className="apple-kicker">Officina</div>
+            <h1 className="apple-page-title">Nuova scheda lavoro</h1>
+            <p className="apple-page-subtitle workorder-new-subtitle">
               Cerca il cliente, seleziona la bici corretta e crea una nuova
               lavorazione in pochi passaggi.
             </p>
           </div>
         </div>
 
-        <div style={section}>
-          <div style={sectionTitle}>1. Seleziona cliente</div>
-          <div style={sectionText}>
-            Cerca per nome, telefono o email.
-          </div>
+        <div className="workorder-new-section">
+          {!selectedCustomer && (
+            <>
+              <div className="workorder-new-section-title">1. Seleziona cliente</div>
+              <div className="workorder-new-section-text">
+                Cerca per nome, telefono o email.
+              </div>
 
-          <input
-            style={input}
-            placeholder="🔍 Cerca cliente..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              if (selectedCustomer && e.target.value !== selectedCustomer.name) {
-                setSelectedCustomer(null);
-                setSelectedBike(null);
-                setBikes([]);
-              }
-            }}
-          />
+              <div className="workorder-new-search-row">
+                <div className="workorder-new-search-field">
+                  <Search size={18} strokeWidth={2} className="workorder-new-search-icon" />
+                  <input
+                    className="apple-input workorder-new-search workorder-new-search-input"
+                    placeholder="Cerca cliente..."
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setSelectedCustomer(null);
+                      setSelectedBike(null);
+                      setBikes([]);
+                    }}
+                  />
+                </div>
 
-          {loadingCustomers ? (
-            <div style={helperBox}>Caricamento clienti...</div>
-          ) : results.length > 0 ? (
-            <div style={resultsGrid}>
-              {results.map((c) => (
-                <button
-                  key={c.id}
-                  style={customerCard}
-                  onClick={() => selectCustomer(c)}
-                >
-                  <div style={customerName}>{c.name || "-"}</div>
-                  <div style={customerInfo}>📞 {c.phone || "-"}</div>
-                  <div style={customerInfo}>✉️ {c.email || "-"}</div>
-                </button>
-              ))}
-            </div>
-          ) : search.trim().length >= 2 ? (
-            <div style={helperBox}>Nessun cliente trovato.</div>
-          ) : (
-            <div style={helperBox}>Scrivi almeno 2 caratteri per iniziare.</div>
+                {customerIdFromQuery && (
+                  <button
+                    type="button"
+                    className="btn-secondary workorder-new-search-close"
+                    onClick={() => {
+                      setAllowCustomerPrefill(true);
+                      setSearch("");
+
+                      const customerFromQuery = customers.find(
+                        (c) => c.id === customerIdFromQuery
+                      );
+
+                      if (customerFromQuery) {
+                        void selectCustomer(customerFromQuery);
+                      }
+                    }}
+                    aria-label="Chiudi ricerca cliente"
+                    title="Chiudi"
+                  >
+                    <X size={18} strokeWidth={2} />
+                  </button>
+                )}
+              </div>
+
+              {loadingCustomers ? (
+                <div className="workorder-new-helper">Caricamento clienti...</div>
+              ) : results.length > 0 ? (
+                <div className="workorder-new-results-grid">
+                  {results.map((c) => (
+                    <button
+                      key={c.id}
+                      className="workorder-new-customer-card"
+                      onClick={() => selectCustomer(c)}
+                    >
+                      <div className="workorder-new-customer-name">{c.name || "-"}</div>
+                      <div className="workorder-new-customer-info">📞 {c.phone || "-"}</div>
+                      <div className="workorder-new-customer-info">✉️ {c.email || "-"}</div>
+                    </button>
+                  ))}
+                </div>
+              ) : search.trim().length >= 2 ? (
+                <div className="workorder-new-helper">Nessun cliente trovato.</div>
+              ) : (
+                <div className="workorder-new-helper">Scrivi almeno 2 caratteri per iniziare.</div>
+              )}
+            </>
           )}
         </div>
 
         {selectedCustomer && (
-          <div style={selectedCustomerBox}>
-            <div style={selectedHeader}>
-              <div style={selectedAvatar}>
+          <div className="workorder-new-selected-box">
+            <div className="workorder-new-selected-header">
+              <div className="workorder-new-selected-avatar">
                 {(selectedCustomer.name || "?").charAt(0).toUpperCase()}
               </div>
 
               <div>
-                <div style={selectedTitle}>{selectedCustomer.name}</div>
-                <div style={customerInfo}>📞 {selectedCustomer.phone || "-"}</div>
-                <div style={customerInfo}>✉️ {selectedCustomer.email || "-"}</div>
+                <div className="workorder-new-selected-title">{selectedCustomer.name}</div>
+                <div className="workorder-new-customer-info">📞 {selectedCustomer.phone || "-"}</div>
+                <div className="workorder-new-customer-info">✉️ {selectedCustomer.email || "-"}</div>
               </div>
             </div>
 
             <button
-              style={changeBtn}
+              className="btn-secondary workorder-new-change-btn"
               onClick={() => {
+                setAllowCustomerPrefill(false);
                 setSelectedCustomer(null);
                 setSelectedBike(null);
                 setBikes([]);
@@ -263,45 +327,42 @@ export default function NewWorkOrderPage() {
         )}
 
         {selectedCustomer && (
-          <div style={section}>
-            <div style={sectionTitle}>2. Seleziona bici</div>
-            <div style={sectionText}>
+          <div className="workorder-new-section">
+            <div className="workorder-new-section-title">2. Seleziona bici</div>
+            <div className="workorder-new-section-text">
               Scegli la bici del cliente da associare alla lavorazione.
             </div>
 
             {loadingBikes ? (
-              <div style={helperBox}>Caricamento bici cliente...</div>
+              <div className="workorder-new-helper">Caricamento bici cliente...</div>
             ) : bikes.length === 0 ? (
-              <div style={helperBox}>
+              <div className="workorder-new-helper">
                 Questo cliente non ha bici registrate.
               </div>
             ) : (
-              <div style={bikeGrid}>
+              <div className="workorder-new-bike-grid">
                 {bikes.map((b) => {
                   const active = selectedBike?.id === b.id;
 
                   return (
                     <button
                       key={b.id}
-                      style={{
-                        ...bikeCard,
-                        ...(active ? bikeCardActive : {}),
-                      }}
+                      className={`workorder-new-bike-card${active ? " is-active" : ""}`}
                       onClick={() => setSelectedBike(b)}
                     >
-                      <div style={bikeTitle}>
+                      <div className="workorder-new-bike-title">
                         🚲 {b.brand || "-"} {b.model || ""}
                       </div>
 
-                      <div style={bikeMetaGrid}>
+                      <div className="workorder-new-bike-meta-grid">
                         <div>
-                          <span style={bikeMetaLabel}>Telaio</span>
-                          <span style={bikeMetaValue}>{b.serial || "-"}</span>
+                          <span className="workorder-new-bike-meta-label">Telaio</span>
+                          <span className="workorder-new-bike-meta-value">{b.serial || "-"}</span>
                         </div>
 
                         <div>
-                          <span style={bikeMetaLabel}>Colore</span>
-                          <span style={bikeMetaValue}>{b.color || "-"}</span>
+                          <span className="workorder-new-bike-meta-label">Colore</span>
+                          <span className="workorder-new-bike-meta-value">{b.color || "-"}</span>
                         </div>
                       </div>
                     </button>
@@ -312,14 +373,14 @@ export default function NewWorkOrderPage() {
           </div>
         )}
 
-        <div style={section}>
-          <div style={sectionTitle}>3. Note lavoro</div>
-          <div style={sectionText}>
+        <div className="workorder-new-section">
+          <div className="workorder-new-section-title">3. Note lavoro</div>
+          <div className="workorder-new-section-text">
             Inserisci eventuali indicazioni iniziali o richiesta del cliente.
           </div>
 
           <textarea
-            style={textarea}
+            className="apple-textarea workorder-new-textarea"
             rows={5}
             value={note}
             onChange={(e) => setNote(e.target.value)}
@@ -327,15 +388,15 @@ export default function NewWorkOrderPage() {
           />
         </div>
 
-        <div style={summaryCard}>
-          <div style={summaryTitle}>Riepilogo scheda</div>
+        <div className="workorder-new-summary-card">
+          <div className="workorder-new-summary-title">Riepilogo scheda</div>
 
-          <div style={summaryRow}>
+          <div className="workorder-new-summary-row">
             <span>Cliente</span>
             <strong>{selectedCustomer?.name || "Non selezionato"}</strong>
           </div>
 
-          <div style={summaryRow}>
+          <div className="workorder-new-summary-row">
             <span>Bici</span>
             <strong>
               {selectedBike
@@ -344,35 +405,29 @@ export default function NewWorkOrderPage() {
             </strong>
           </div>
 
-          <div style={summaryRow}>
+          <div className="workorder-new-summary-row">
             <span>Stato iniziale</span>
             <strong>Aperta</strong>
           </div>
         </div>
 
-        <div style={footer}>
+        <div className="workorder-new-footer">
           <button
-            className="ghost"
-            onClick={() => router.push("/workorders")}
-            style={secondaryBtn}
+            className="btn-secondary"
+            onClick={() =>
+              router.push(
+                customerIdFromQuery ? `/customers/${customerIdFromQuery}` : "/workorders"
+              )
+            }
             disabled={creating}
           >
             Annulla
           </button>
 
           <button
-            className="create"
+            className="btn-primary workorder-new-create-btn"
             onClick={createWorkOrder}
-            style={{
-              ...createBtn,
-              opacity:
-                !selectedCustomer || !selectedBike || creating ? 0.7 : 1,
-              cursor:
-                !selectedCustomer || !selectedBike || creating
-                  ? "not-allowed"
-                  : "pointer",
-            }}
-            disabled={!selectedCustomer || !selectedBike || creating}
+            disabled={creating}
           >
             {creating ? "Creazione..." : "Crea scheda lavoro"}
           </button>
@@ -658,34 +713,4 @@ const createBtn: React.CSSProperties = {
   fontWeight: 700,
   fontSize: 15,
   boxShadow: "0 12px 24px rgba(37,99,235,0.2)",
-};
-
-const toastStyle: React.CSSProperties = {
-  position: "fixed",
-  top: 24,
-  right: 24,
-  zIndex: 1100,
-  padding: "14px 18px",
-  borderRadius: 14,
-  fontWeight: 700,
-  boxShadow: "0 12px 30px rgba(15,23,42,0.16)",
-  maxWidth: 420,
-};
-
-const toastSuccess: React.CSSProperties = {
-  background: "#dcfce7",
-  color: "#166534",
-  border: "1px solid #86efac",
-};
-
-const toastError: React.CSSProperties = {
-  background: "#fee2e2",
-  color: "#991b1b",
-  border: "1px solid #fca5a5",
-};
-
-const toastInfo: React.CSSProperties = {
-  background: "#eff6ff",
-  color: "#1d4ed8",
-  border: "1px solid #93c5fd",
 };

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../lib/supabase";
+import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 
@@ -22,28 +22,22 @@ type WorkOrderRow = {
 export default function WorkOrdersPage() {
   const [orders, setOrders] = useState<WorkOrderRow[]>([]);
   const [search, setSearch] = useState("");
-  const [screenWidth, setScreenWidth] = useState(1200);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadOrders();
   }, []);
 
-  useEffect(() => {
-    function handleResize() {
-      setScreenWidth(window.innerWidth);
-    }
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
   async function loadOrders() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("work_orders")
       .select(
         `
-        *,
+        id,
+        status,
+        archived,
+        created_at,
         customers(name),
         bikes(brand,model)
       `
@@ -51,59 +45,120 @@ export default function WorkOrdersPage() {
       .eq("archived", false)
       .order("created_at", { ascending: false });
 
+    if (error) {
+      console.error("Errore caricamento schede:", error);
+      setOrders([]);
+      return;
+    }
+
     setOrders((data as WorkOrderRow[]) || []);
   }
 
   async function updateStatus(id: string, newStatus: string) {
-    await supabase
+    setUpdatingId(id);
+
+    const { error } = await supabase
       .from("work_orders")
       .update({
         status: newStatus,
-        archived: newStatus === "closed",
       })
       .eq("id", id);
 
-    loadOrders();
-  }
+    if (error) {
+      console.error("Errore aggiornamento stato:", error);
+      setUpdatingId(null);
+      return;
+    }
 
-  async function archiveOrder(id: string) {
-    await supabase
-      .from("work_orders")
-      .update({
-        archived: true,
-        status: "closed",
-      })
-      .eq("id", id);
-
-    loadOrders();
+    await loadOrders();
+    setUpdatingId(null);
   }
 
   async function deleteOrder(id: string) {
-    const ok = confirm("Eliminare scheda lavoro?");
+    const ok = window.confirm("Eliminare scheda lavoro?");
     if (!ok) return;
 
-    await supabase.from("work_order_parts").delete().eq("work_order_id", id);
-    await supabase.from("work_order_services").delete().eq("work_order_id", id);
-    await supabase.from("inventory_movements").delete().eq("work_order_id", id);
-    await supabase.from("work_orders").delete().eq("id", id);
+    setDeletingId(id);
 
-    loadOrders();
+    const { error: partsError } = await supabase
+      .from("work_order_parts")
+      .delete()
+      .eq("work_order_id", id);
+
+    if (partsError) {
+      console.error("Errore eliminazione ricambi:", partsError);
+      setDeletingId(null);
+      return;
+    }
+
+    const { error: servicesError } = await supabase
+      .from("work_order_services")
+      .delete()
+      .eq("work_order_id", id);
+
+    if (servicesError) {
+      console.error("Errore eliminazione interventi:", servicesError);
+      setDeletingId(null);
+      return;
+    }
+
+    const { error: movementsError } = await supabase
+      .from("inventory_movements")
+      .delete()
+      .eq("work_order_id", id);
+
+    if (movementsError) {
+      console.error("Errore eliminazione movimenti:", movementsError);
+      setDeletingId(null);
+      return;
+    }
+
+    const { error: nonBillableError } = await supabase
+      .from("non_billable_work_order_items")
+      .delete()
+      .eq("work_order_id", id);
+
+    if (nonBillableError) {
+      console.error("Errore eliminazione ricambi da gestire:", nonBillableError);
+      setDeletingId(null);
+      return;
+    }
+
+    const { error: orderError } = await supabase
+      .from("work_orders")
+      .delete()
+      .eq("id", id);
+
+    if (orderError) {
+      console.error("Errore eliminazione scheda:", orderError);
+      setDeletingId(null);
+      return;
+    }
+
+    await loadOrders();
+    setDeletingId(null);
   }
 
   function onDragEnd(result: any) {
     if (!result.destination) return;
 
-    const id = result.draggableId;
-    const newStatus = result.destination.droppableId;
+    const id = String(result.draggableId);
+    const newStatus = String(result.destination.droppableId);
+
+    if (!id || !newStatus) return;
 
     updateStatus(id, newStatus);
   }
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {
-      if (!search) return true;
+      if (!search.trim()) return true;
+
+      const q = search.toLowerCase();
+
       return (
-        o.customers?.name?.toLowerCase().includes(search.toLowerCase()) || false
+        (o.customers?.name || "").toLowerCase().includes(q) ||
+        `${o.bikes?.brand || ""} ${o.bikes?.model || ""}`.toLowerCase().includes(q)
       );
     });
   }, [orders, search]);
@@ -112,157 +167,76 @@ export default function WorkOrdersPage() {
   const working = filtered.filter((o) => o.status === "working");
   const closed = filtered.filter((o) => o.status === "closed");
 
-  const isMobile = screenWidth < 768;
-  const isTablet = screenWidth >= 768 && screenWidth < 1100;
-
-  const page: React.CSSProperties = {
-    padding: isMobile ? 12 : 24,
-    maxWidth: 1300,
-    margin: "0 auto",
-    background: "#f6f8fb",
-    minHeight: "100vh",
-    boxSizing: "border-box",
-  };
-
-  const header: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: isMobile ? "stretch" : "center",
-    marginBottom: 20,
-    gap: 14,
-    flexWrap: "wrap",
-    flexDirection: isMobile ? "column" : "row",
-  };
-
-  const title: React.CSSProperties = {
-    margin: 0,
-    fontSize: isMobile ? 26 : 32,
-    fontWeight: 800,
-    color: "#0f172a",
-  };
-
-  const subtitle: React.CSSProperties = {
-    marginTop: 6,
-    color: "#64748b",
-    fontSize: isMobile ? 14 : 15,
-    lineHeight: 1.4,
-  };
-
-  const headerActions: React.CSSProperties = {
-    display: "flex",
-    gap: 10,
-    flexWrap: "wrap",
-    width: isMobile ? "100%" : "auto",
-  };
-
-  const searchInput: React.CSSProperties = {
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: 12,
-    border: "1px solid #ddd",
-    marginBottom: 20,
-    fontSize: 14,
-    boxSizing: "border-box",
-  };
-
-  const stats: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: isMobile
-      ? "1fr"
-      : isTablet
-      ? "repeat(3, minmax(0, 1fr))"
-      : "repeat(3, minmax(0, 1fr))",
-    gap: 12,
-    marginBottom: 20,
-  };
-
-  const board: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: isMobile
-      ? "1fr"
-      : isTablet
-      ? "1fr 1fr"
-      : "1fr 1fr 1fr",
-    gap: 16,
-    alignItems: "start",
-  };
-
   return (
-    <div style={page}>
-      <div style={header}>
-        <div>
-          <h1 style={title}>Schede officina</h1>
-          <p style={subtitle}>
-            Gestisci i lavori dell&apos;officina tramite workflow drag & drop.
-          </p>
+    <div className="app-page-shell workorders-page-shell">
+      <div className="page-stack">
+        <div className="page-header workorders-header">
+          <div className="page-header__left">
+            <div className="apple-kicker">Officina</div>
+            <h1 className="apple-page-title">Schede officina</h1>
+            <p className="apple-page-subtitle">
+              Gestisci i lavori dell&apos;officina tramite workflow drag &amp; drop.
+            </p>
+          </div>
+
+          <div className="page-header__right workorders-header-actions">
+            <Link href="/workorders/archive">
+              <button className="btn-secondary workorders-archive-btn">Archivio</button>
+            </Link>
+
+            <Link href="/workorders/new">
+              <button className="btn-primary workorders-new-btn">
+                + Nuova scheda lavoro
+              </button>
+            </Link>
+          </div>
         </div>
 
-        <div style={headerActions}>
-          <Link href="/workorders/archive" style={{ width: isMobile ? "100%" : "auto" }}>
-            <button
-              style={{
-                ...archiveBtn,
-                width: isMobile ? "100%" : "auto",
-              }}
-            >
-              Archivio
-            </button>
-          </Link>
+        <input
+          className="apple-input workorders-search"
+          placeholder="Cerca cliente o bici..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
 
-          <Link href="/workorders/new" style={{ width: isMobile ? "100%" : "auto" }}>
-            <button
-              style={{
-                ...newBtn,
-                width: isMobile ? "100%" : "auto",
-              }}
-            >
-              + Nuova scheda lavoro
-            </button>
-          </Link>
+        <div className="workorders-stats-grid">
+          <Stat title="Aperte" value={open.length} tone="blue" />
+          <Stat title="In lavorazione" value={working.length} tone="orange" />
+          <Stat title="Chiuse" value={closed.length} tone="green" />
         </div>
+
+        <DragDropContext onDragEnd={onDragEnd}>
+          <div className="workorders-board">
+            <Column
+              title="Aperte"
+              status="open"
+              orders={open}
+              updateStatus={updateStatus}
+              deleteOrder={deleteOrder}
+              updatingId={updatingId}
+              deletingId={deletingId}
+            />
+            <Column
+              title="In lavorazione"
+              status="working"
+              orders={working}
+              updateStatus={updateStatus}
+              deleteOrder={deleteOrder}
+              updatingId={updatingId}
+              deletingId={deletingId}
+            />
+            <Column
+              title="Chiuse"
+              status="closed"
+              orders={closed}
+              updateStatus={updateStatus}
+              deleteOrder={deleteOrder}
+              updatingId={updatingId}
+              deletingId={deletingId}
+            />
+          </div>
+        </DragDropContext>
       </div>
-
-      <input
-        placeholder="Cerca cliente..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={searchInput}
-      />
-
-      <div style={stats}>
-        <Stat title="Aperte" value={open.length} color="#3b82f6" />
-        <Stat title="In lavorazione" value={working.length} color="#f59e0b" />
-        <Stat title="Chiuse" value={closed.length} color="#10b981" />
-      </div>
-
-      <DragDropContext onDragEnd={onDragEnd}>
-        <div style={board}>
-          <Column
-            title="Aperte"
-            status="open"
-            orders={open}
-            archiveOrder={archiveOrder}
-            deleteOrder={deleteOrder}
-            isMobile={isMobile}
-          />
-          <Column
-            title="In lavorazione"
-            status="working"
-            orders={working}
-            archiveOrder={archiveOrder}
-            deleteOrder={deleteOrder}
-            isMobile={isMobile}
-          />
-          <Column
-            title="Chiuse"
-            status="closed"
-            orders={closed}
-            archiveOrder={archiveOrder}
-            deleteOrder={deleteOrder}
-            isMobile={isMobile}
-          />
-        </div>
-      </DragDropContext>
     </div>
   );
 }
@@ -271,58 +245,33 @@ function Column({
   title,
   status,
   orders,
-  archiveOrder,
+  updateStatus,
   deleteOrder,
-  isMobile,
+  updatingId,
+  deletingId,
 }: {
   title: string;
   status: string;
   orders: WorkOrderRow[];
-  archiveOrder: (id: string) => void;
+  updateStatus: (id: string, newStatus: string) => void;
   deleteOrder: (id: string) => void;
-  isMobile: boolean;
+  updatingId: string | null;
+  deletingId: string | null;
 }) {
-  const column: React.CSSProperties = {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    minWidth: 0,
-  };
-
-  const columnHeader: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 10,
-  };
-
-  const count: React.CSSProperties = {
-    background: "#eee",
-    padding: "4px 10px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 700,
-    whiteSpace: "nowrap",
-  };
-
-  const columnBody: React.CSSProperties = {
-    minHeight: isMobile ? 120 : 350,
-    background: "#eef2f7",
-    padding: isMobile ? 10 : 12,
-    borderRadius: 14,
-    boxSizing: "border-box",
-  };
-
   return (
-    <div style={column}>
-      <div style={columnHeader}>
-        <h3 style={{ margin: 0, fontSize: isMobile ? 18 : 22 }}>{title}</h3>
-        <span style={count}>{orders.length}</span>
+    <div className="workorders-column">
+      <div className="workorders-column__header">
+        <h3 className="workorders-column__title">{title}</h3>
+        <span className="workorders-column__count">{orders.length}</span>
       </div>
 
       <Droppable droppableId={status}>
         {(provided) => (
-          <div ref={provided.innerRef} {...provided.droppableProps} style={columnBody}>
+          <div
+            ref={provided.innerRef}
+            {...provided.droppableProps}
+            className="workorders-column__body"
+          >
             {orders.map((o, index) => (
               <Draggable key={o.id} draggableId={String(o.id)} index={index}>
                 {(provided) => (
@@ -333,9 +282,10 @@ function Column({
                   >
                     <Card
                       order={o}
-                      archiveOrder={archiveOrder}
+                      updateStatus={updateStatus}
                       deleteOrder={deleteOrder}
-                      isMobile={isMobile}
+                      updatingId={updatingId}
+                      deletingId={deletingId}
                     />
                   </div>
                 )}
@@ -352,105 +302,106 @@ function Column({
 
 function Card({
   order,
-  archiveOrder,
+  updateStatus,
   deleteOrder,
-  isMobile,
+  updatingId,
+  deletingId,
 }: {
   order: WorkOrderRow;
-  archiveOrder: (id: string) => void;
+  updateStatus: (id: string, newStatus: string) => void;
   deleteOrder: (id: string) => void;
-  isMobile: boolean;
+  updatingId: string | null;
+  deletingId: string | null;
 }) {
-  const card: React.CSSProperties = {
-    background: "#fff",
-    padding: isMobile ? 14 : 16,
-    borderRadius: 14,
-    marginBottom: 10,
-    boxShadow: "0 4px 15px rgba(0,0,0,0.08)",
-    boxSizing: "border-box",
-    width: "100%",
-  };
-
-  const cardTop: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 12,
-    gap: 10,
-    flexDirection: isMobile ? "column" : "row",
-  };
-
-  const client: React.CSSProperties = {
-    fontWeight: 800,
-    color: "#0f172a",
-    fontSize: isMobile ? 16 : 17,
-    lineHeight: 1.3,
-  };
-
-  const bike: React.CSSProperties = {
-    fontSize: isMobile ? 14 : 13,
-    color: "#666",
-    marginTop: 6,
-    lineHeight: 1.4,
-  };
-
-  const date: React.CSSProperties = {
-    fontSize: 12,
-    color: "#888",
-    whiteSpace: "nowrap",
-  };
-
-  const actions: React.CSSProperties = {
-    display: "flex",
-    gap: 8,
-    flexWrap: "wrap",
-  };
-
-  const baseBtn: React.CSSProperties = {
-    border: "none",
-    color: "white",
-    padding: isMobile ? "10px 14px" : "8px 12px",
-    borderRadius: 8,
-    cursor: "pointer",
-    fontWeight: 700,
-    fontSize: isMobile ? 15 : 14,
-  };
+  const isUpdating = updatingId === order.id;
+  const isDeleting = deletingId === order.id;
+  const isBusy = isUpdating || isDeleting;
 
   return (
-    <div style={card}>
-      <div style={cardTop}>
+    <div className="workorders-card">
+      <div className="workorders-card__top">
         <div>
-          <div style={client}>{order.customers?.name || "Cliente senza nome"}</div>
-          <div style={bike}>
+          <div className="workorders-card__client">
+            {order.customers?.name || "Cliente senza nome"}
+          </div>
+          <div className="workorders-card__bike">
             🚲 {order.bikes?.brand || "-"} {order.bikes?.model || ""}
           </div>
         </div>
 
-        <div style={date}>
+        <div className="workorders-card__date">
           {order.created_at
             ? new Date(order.created_at).toLocaleDateString("it-IT")
             : "-"}
         </div>
       </div>
 
-      <div style={actions}>
-        <Link href={`/workorders/${order.id}`}>
-          <button style={{ ...baseBtn, background: "#22c55e" }}>Apri</button>
-        </Link>
+      <div className="workorders-card__actions">
+        {order.status === "open" && (
+          <>
+            <button
+              onClick={() => deleteOrder(order.id)}
+              className="workorders-action-btn workorders-action-btn--danger"
+              disabled={isBusy}
+            >
+              {isDeleting ? "Elimino..." : "Elimina"}
+            </button>
 
-        <button
-          onClick={() => archiveOrder(order.id)}
-          style={{ ...baseBtn, background: "#64748b" }}
-        >
-          Archivia
-        </button>
+            <div className="workorders-card__actions-right">
+              <button
+                onClick={() => updateStatus(order.id, "working")}
+                className="workorders-action-btn workorders-action-btn--primary"
+                disabled={isBusy}
+              >
+                {isUpdating ? "Aggiornamento..." : "Prendi in carico"}
+              </button>
+            </div>
+          </>
+        )}
 
-        <button
-          onClick={() => deleteOrder(order.id)}
-          style={{ ...baseBtn, background: "#ef4444" }}
-        >
-          Elimina
-        </button>
+        {order.status === "working" && (
+          <>
+            <button
+              onClick={() => deleteOrder(order.id)}
+              className="workorders-action-btn workorders-action-btn--danger"
+              disabled={isBusy}
+            >
+              {isDeleting ? "Elimino..." : "Elimina"}
+            </button>
+
+            <div className="workorders-card__actions-right">
+              <Link href={`/workorders/${order.id}`}>
+                <button
+                  className="workorders-action-btn workorders-action-btn--success"
+                  disabled={isBusy}
+                >
+                  Apri
+                </button>
+              </Link>
+
+              <button
+                onClick={() => updateStatus(order.id, "closed")}
+                className="workorders-action-btn workorders-action-btn--primary"
+                disabled={isBusy}
+              >
+                {isUpdating ? "Aggiornamento..." : "Chiudi"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {order.status === "closed" && (
+          <div className="workorders-card__actions-right">
+            <Link href={`/workorders/${order.id}/report`}>
+              <button
+                className="workorders-action-btn workorders-action-btn--primary"
+                disabled={isBusy}
+              >
+                Apri report
+              </button>
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -459,56 +410,18 @@ function Card({
 function Stat({
   title,
   value,
-  color,
+  tone,
 }: {
   title: string;
   value: number;
-  color: string;
+  tone: "blue" | "orange" | "green";
 }) {
-  const statCard: React.CSSProperties = {
-    background: "#fff",
-    padding: 16,
-    borderRadius: 14,
-    boxShadow: "0 3px 10px rgba(0,0,0,0.05)",
-    minWidth: 0,
-  };
-
-  const statTitle: React.CSSProperties = {
-    fontSize: 12,
-    color: "#666",
-  };
-
-  const statValue: React.CSSProperties = {
-    fontSize: 28,
-    fontWeight: 800,
-    marginTop: 6,
-    color,
-  };
-
   return (
-    <div style={statCard}>
-      <div style={statTitle}>{title}</div>
-      <div style={statValue}>{value}</div>
+    <div className="dashboard-metric-card workorders-metric-card">
+      <div className={`dashboard-metric-value workorders-metric-value is-${tone}`}>
+        {value}
+      </div>
+      <div className="dashboard-metric-label">{title}</div>
     </div>
   );
 }
-
-const archiveBtn: React.CSSProperties = {
-  background: "#64748b",
-  color: "white",
-  border: "none",
-  padding: "12px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const newBtn: React.CSSProperties = {
-  background: "#22c55e",
-  color: "white",
-  border: "none",
-  padding: "12px 16px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};

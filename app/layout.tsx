@@ -1,10 +1,10 @@
 import "./globals.css";
-import AuthGuard from "../components/AuthGuard";
-import AppShell from "../components/AppShell";
+import type { Metadata } from "next";
+import AppShell from "@/components/AppShell";
 
-export const metadata = {
-  title: "Biga Bike Manager",
-  description: "Gestionale officina e magazzino bici",
+export const metadata: Metadata = {
+  title: "Biga Bike",
+  description: "Gestionale officina e magazzino",
 };
 
 export default function RootLayout({
@@ -14,11 +14,17 @@ export default function RootLayout({
 }) {
   return (
     <html lang="it">
-      <body>
-        <AuthGuard>
-          <AppShell>{children}</AppShell>
-        </AuthGuard>
+      <body style={bodyStyle}>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
 }
+
+const bodyStyle: React.CSSProperties = {
+  margin: 0,
+  padding: 0,
+  fontFamily:
+    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  background: "#f8fafc",
+};

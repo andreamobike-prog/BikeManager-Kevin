@@ -4,16 +4,24 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Modal from "@/components/Modal";
+import { AlertTriangle, Upload, Download, Plus, Package2 } from "lucide-react";
 
 type Product = {
   id: string;
   title: string;
   description: string | null;
   ean: string | null;
+  supplier: string | null;
   location: string | null;
   warehouse_qty: number;
+  min_stock: number;
+  reorder_qty: number;
   price_b2b: number | null;
   price_b2c: number | null;
+};
+
+type SupplierRow = {
+  name: string | null;
 };
 
 type ToastType = "success" | "error" | "info";
@@ -26,12 +34,11 @@ type SortOption =
   | "value_desc"
   | "value_asc";
 
-const LOW_STOCK_THRESHOLD = 3;
-
 export default function InventoryPage() {
   const router = useRouter();
 
   const [products, setProducts] = useState<Product[]>([]);
+  const [suppliers, setSuppliers] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [editProduct, setEditProduct] = useState<Product | null>(null);
 
@@ -41,6 +48,7 @@ export default function InventoryPage() {
 
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [locationFilter, setLocationFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("title_asc");
 
   const [toast, setToast] = useState<{
@@ -50,6 +58,7 @@ export default function InventoryPage() {
 
   useEffect(() => {
     loadProducts();
+    loadSuppliers();
   }, []);
 
   useEffect(() => {
@@ -76,8 +85,45 @@ export default function InventoryPage() {
       return;
     }
 
-    setProducts((data as Product[]) || []);
+    const normalized = ((data as Product[]) || []).map((p) => ({
+      ...p,
+      warehouse_qty: Number(p.warehouse_qty || 0),
+      min_stock: Number((p as any).min_stock || 0),
+      reorder_qty: Number((p as any).reorder_qty || 0),
+      price_b2b:
+        p.price_b2b === null || p.price_b2b === undefined
+          ? null
+          : Number(p.price_b2b),
+      price_b2c:
+        p.price_b2c === null || p.price_b2c === undefined
+          ? null
+          : Number(p.price_b2c),
+      supplier: p.supplier || null,
+      location: p.location || null,
+      description: p.description || null,
+      ean: p.ean || null,
+    }));
+
+    setProducts(normalized);
     setLoading(false);
+  }
+
+  async function loadSuppliers() {
+    const { data, error } = await supabase
+      .from("suppliers")
+      .select("name")
+      .order("name");
+
+    if (error) {
+      console.error("Errore caricamento fornitori:", error);
+      return;
+    }
+
+    const names = ((data as SupplierRow[]) || [])
+      .map((s) => (s.name || "").trim())
+      .filter(Boolean);
+
+    setSuppliers([...new Set(names)].sort((a, b) => a.localeCompare(b)));
   }
 
   function formatCurrency(value: number | null | undefined) {
@@ -93,29 +139,36 @@ export default function InventoryPage() {
 
   function getStockStatus(product: Product) {
     const qty = Number(product.warehouse_qty || 0);
+    const min = Number(product.min_stock || 0);
 
     if (qty <= 0) {
       return {
         label: "Esaurito",
-        style: stockBadgeOut,
+        tone: "out" as const,
       };
     }
 
-    if (qty <= LOW_STOCK_THRESHOLD) {
+    if (qty <= min) {
       return {
         label: "Scorta bassa",
-        style: stockBadgeLow,
+        tone: "low" as const,
       };
     }
 
     return {
       label: "Disponibile",
-      style: stockBadgeOk,
+      tone: "ok" as const,
     };
   }
 
   const uniqueLocations = useMemo(() => {
     return [...new Set(products.map((p) => (p.location || "").trim()).filter(Boolean))].sort(
+      (a, b) => a.localeCompare(b)
+    );
+  }, [products]);
+
+  const uniqueSuppliers = useMemo(() => {
+    return [...new Set(products.map((p) => (p.supplier || "").trim()).filter(Boolean))].sort(
       (a, b) => a.localeCompare(b)
     );
   }, [products]);
@@ -132,6 +185,7 @@ export default function InventoryPage() {
           p.ean || "",
           p.description || "",
           p.location || "",
+          p.supplier || "",
         ]
           .join(" ")
           .toLowerCase();
@@ -143,9 +197,10 @@ export default function InventoryPage() {
     if (stockFilter !== "all") {
       result = result.filter((p) => {
         const qty = Number(p.warehouse_qty || 0);
+        const min = Number(p.min_stock || 0);
 
-        if (stockFilter === "available") return qty > LOW_STOCK_THRESHOLD;
-        if (stockFilter === "low") return qty > 0 && qty <= LOW_STOCK_THRESHOLD;
+        if (stockFilter === "available") return qty > min;
+        if (stockFilter === "low") return qty > 0 && qty <= min;
         if (stockFilter === "out") return qty <= 0;
         return true;
       });
@@ -153,6 +208,10 @@ export default function InventoryPage() {
 
     if (locationFilter) {
       result = result.filter((p) => (p.location || "") === locationFilter);
+    }
+
+    if (supplierFilter) {
+      result = result.filter((p) => (p.supplier || "") === supplierFilter);
     }
 
     result.sort((a, b) => {
@@ -174,7 +233,7 @@ export default function InventoryPage() {
     });
 
     return result;
-  }, [products, search, stockFilter, locationFilter, sortBy]);
+  }, [products, search, stockFilter, locationFilter, supplierFilter, sortBy]);
 
   async function updateProduct() {
     if (!editProduct) return;
@@ -189,23 +248,28 @@ export default function InventoryPage() {
 
     setSaving(true);
 
+    const payload = {
+      title: editProduct.title.trim(),
+      description: editProduct.description?.trim() || null,
+      ean: editProduct.ean?.trim() || null,
+      supplier: editProduct.supplier?.trim() || null,
+      location: editProduct.location?.trim() || null,
+      warehouse_qty: Number(editProduct.warehouse_qty || 0),
+      min_stock: Number(editProduct.min_stock || 0),
+      reorder_qty: Number(editProduct.reorder_qty || 0),
+      price_b2b:
+        editProduct.price_b2b === null || editProduct.price_b2b === undefined
+          ? null
+          : Number(editProduct.price_b2b),
+      price_b2c:
+        editProduct.price_b2c === null || editProduct.price_b2c === undefined
+          ? null
+          : Number(editProduct.price_b2c),
+    };
+
     const { error } = await supabase
       .from("products")
-      .update({
-        title: editProduct.title.trim(),
-        description: editProduct.description?.trim() || null,
-        ean: editProduct.ean?.trim() || null,
-        location: editProduct.location?.trim() || null,
-        warehouse_qty: Number(editProduct.warehouse_qty || 0),
-        price_b2b:
-          editProduct.price_b2b === null || editProduct.price_b2b === undefined
-            ? null
-            : Number(editProduct.price_b2b),
-        price_b2c:
-          editProduct.price_b2c === null || editProduct.price_b2c === undefined
-            ? null
-            : Number(editProduct.price_b2c),
-      })
+      .update(payload)
       .eq("id", editProduct.id);
 
     if (error) {
@@ -267,24 +331,32 @@ export default function InventoryPage() {
   function exportCSV() {
     const rows = filtered.map((p) => ({
       nome: p.title || "",
+      fornitore: p.supplier || "",
       descrizione: p.description || "",
       ean: p.ean || "",
       posizione: p.location || "",
       quantita: p.warehouse_qty || 0,
+      scorta_minima: p.min_stock || 0,
+      riordino_consigliato: p.reorder_qty || 0,
       prezzo_b2b: p.price_b2b || 0,
       prezzo_b2c: p.price_b2c || 0,
       valore: stockValue(p).toFixed(2),
+      stato: getStockStatus(p).label,
     }));
 
     const headers = Object.keys(rows[0] || {
       nome: "",
+      fornitore: "",
       descrizione: "",
       ean: "",
       posizione: "",
       quantita: "",
+      scorta_minima: "",
+      riordino_consigliato: "",
       prezzo_b2b: "",
       prezzo_b2c: "",
       valore: "",
+      stato: "",
     });
 
     const csv = [
@@ -313,18 +385,15 @@ export default function InventoryPage() {
   const totalItems = products.length;
   const totalFiltered = filtered.length;
 
-  const totalValue = products.reduce((acc, p) => {
-    return acc + stockValue(p);
-  }, 0);
-
-  const totalQty = products.reduce((acc, p) => {
-    return acc + Number(p.warehouse_qty || 0);
-  }, 0);
+  const totalValue = products.reduce((acc, p) => acc + stockValue(p), 0);
+  const totalQty = products.reduce((acc, p) => acc + Number(p.warehouse_qty || 0), 0);
 
   const outOfStockCount = products.filter((p) => Number(p.warehouse_qty || 0) <= 0).length;
+
   const lowStockCount = products.filter((p) => {
     const qty = Number(p.warehouse_qty || 0);
-    return qty > 0 && qty <= LOW_STOCK_THRESHOLD;
+    const min = Number(p.min_stock || 0);
+    return qty > 0 && qty <= min;
   }).length;
 
   return (
@@ -336,210 +405,275 @@ export default function InventoryPage() {
             ...(toast.type === "success"
               ? toastSuccess
               : toast.type === "error"
-              ? toastError
-              : toastInfo),
+                ? toastError
+                : toastInfo),
           }}
         >
           {toast.message}
         </div>
       )}
 
-      <div style={header}>
-        <div>
-          <h1 style={pageTitle}>Magazzino</h1>
-          <p style={pageSubtitle}>
-            Gestisci prodotti, quantità, prezzi e valore complessivo del magazzino.
+      <div className="page-header page-header--inventory">
+        <div className="page-header__left page-header__left--inventory">
+          <h1 className="apple-page-title">Magazzino</h1>
+          <p className="apple-page-subtitle">
+            Gestisci prodotti, quantità e riordini del magazzino.
           </p>
         </div>
 
-        <div style={headerActions}>
-          <button onClick={exportCSV} style={secondaryButton}>
-            ⬇ Esporta CSV
+        <div className="page-header__right">
+
+          <button
+            onClick={() => router.push("/inventory/import")}
+            className="btn-secondary"
+          >
+            <Upload size={17} strokeWidth={2} />
+            <span>Importa prodotti</span>
+          </button>
+
+          <button onClick={exportCSV} className="btn-secondary">
+            <Download size={17} strokeWidth={2} />
+            <span>Esporta CSV</span>
           </button>
 
           <button
             onClick={() => router.push("/inventory/new")}
-            style={primaryButton}
+            className="btn-primary"
           >
-            + Nuovo articolo
+            <Plus size={17} strokeWidth={2} />
+            <span>Nuovo articolo</span>
           </button>
         </div>
       </div>
 
-      <div style={counters}>
-        <div style={counterCard}>
-          <div style={counterLabel}>Articoli totali</div>
-          <div style={counterValue}>{totalItems}</div>
+      <div className="section-grid-3 inventory-summary-grid">
+        <div className="apple-panel inventory-summary-card">
+          <div className="inventory-summary-value">
+            {formatCurrency(totalValue)}
+          </div>
+          <div className="inventory-summary-label">Valore magazzino</div>
         </div>
 
-        <div style={counterCard}>
-          <div style={counterLabel}>Quantità complessiva</div>
-          <div style={counterValue}>{totalQty}</div>
+        <div className="apple-panel inventory-summary-card">
+          <div className="inventory-summary-value">{totalItems}</div>
+          <div className="inventory-summary-label">Articoli totali</div>
         </div>
 
-        <div style={counterCard}>
-          <div style={counterLabel}>Valore magazzino</div>
-          <div style={counterValue}>{formatCurrency(totalValue)}</div>
+        <div className="apple-panel inventory-summary-card">
+          <div className="inventory-summary-value">{totalQty}</div>
+          <div className="inventory-summary-label">Quantità complessiva</div>
         </div>
 
-        <div style={counterCard}>
-          <div style={counterLabel}>Scorte basse</div>
-          <div style={counterValue}>{lowStockCount}</div>
+        <div className="apple-panel inventory-summary-card">
+          <div className="inventory-summary-value">{lowStockCount}</div>
+          <div className="inventory-summary-label">Scorte basse</div>
         </div>
 
-        <div style={counterCard}>
-          <div style={counterLabel}>Esauriti</div>
-          <div style={counterValue}>{outOfStockCount}</div>
+        <div className="apple-panel inventory-summary-card">
+          <div className="inventory-summary-value">{outOfStockCount}</div>
+          <div className="inventory-summary-label">Esauriti</div>
         </div>
+
+        <button
+          onClick={() => router.push("/inventory/low-stock")}
+          className="apple-panel inventory-summary-card inventory-summary-action"
+        >
+          <div className="inventory-summary-icon">
+            <AlertTriangle size={34} strokeWidth={2.2} />
+          </div>
+
+          <div className="inventory-summary-label inventory-summary-label--action">
+            Sotto scorta
+          </div>
+        </button>
       </div>
 
-      <div style={filtersCard}>
-        <div style={filtersGrid}>
-          <input
-            placeholder="Cerca nome, EAN, descrizione o posizione..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={searchInput}
-          />
+      <div className="inventory-results-panel">
+        <div className="inventory-filters-inner" style={filtersCard}>
+          <div style={filtersGrid}>
+            <input
+              className="inventory-filters-control"
+              placeholder="Cerca nome, EAN, descrizione, posizione o fornitore..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={searchInput}
+            />
 
-          <select
-            value={stockFilter}
-            onChange={(e) => setStockFilter(e.target.value as StockFilter)}
-            style={select}
-          >
-            <option value="all">Tutti gli articoli</option>
-            <option value="available">Disponibili</option>
-            <option value="low">Scorta bassa</option>
-            <option value="out">Esauriti</option>
-          </select>
+            <select
+              className="inventory-filters-control"
+              value={stockFilter}
+              onChange={(e) => setStockFilter(e.target.value as StockFilter)}
+              style={select}
+            >
+              <option value="all">Tutti gli articoli</option>
+              <option value="available">Disponibili</option>
+              <option value="low">Scorta bassa</option>
+              <option value="out">Esauriti</option>
+            </select>
 
-          <select
-            value={locationFilter}
-            onChange={(e) => setLocationFilter(e.target.value)}
-            style={select}
-          >
-            <option value="">Tutte le posizioni</option>
-            {uniqueLocations.map((loc) => (
-              <option key={loc} value={loc}>
-                {loc}
-              </option>
-            ))}
-          </select>
+            <select
+              className="inventory-filters-control"
+              value={supplierFilter}
+              onChange={(e) => setSupplierFilter(e.target.value)}
+              style={select}
+            >
+              <option value="">Tutti i fornitori</option>
+              {uniqueSuppliers.map((supplier) => (
+                <option key={supplier} value={supplier}>
+                  {supplier}
+                </option>
+              ))}
+            </select>
 
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as SortOption)}
-            style={select}
-          >
-            <option value="title_asc">Nome A-Z</option>
-            <option value="title_desc">Nome Z-A</option>
-            <option value="qty_desc">Quantità maggiore</option>
-            <option value="qty_asc">Quantità minore</option>
-            <option value="value_desc">Valore maggiore</option>
-            <option value="value_asc">Valore minore</option>
-          </select>
+            <select
+              className="inventory-filters-control"
+              value={locationFilter}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              style={select}
+            >
+              <option value="">Tutte le posizioni</option>
+              {uniqueLocations.map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc}
+                </option>
+              ))}
+            </select>
 
-          <button
-            style={clearFiltersButton}
-            onClick={() => {
-              setSearch("");
-              setStockFilter("all");
-              setLocationFilter("");
-              setSortBy("title_asc");
-            }}
-          >
-            Reset
-          </button>
+            <select
+              className="inventory-filters-control"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              style={select}
+            >
+              <option value="title_asc">Nome A-Z</option>
+              <option value="title_desc">Nome Z-A</option>
+              <option value="qty_desc">Quantità maggiore</option>
+              <option value="qty_asc">Quantità minore</option>
+              <option value="value_desc">Valore maggiore</option>
+              <option value="value_asc">Valore minore</option>
+            </select>
+
+            <button
+              className="inventory-filters-control inventory-filters-reset"
+              style={clearFiltersButton}
+              onClick={() => {
+                setSearch("");
+                setStockFilter("all");
+                setSupplierFilter("");
+                setLocationFilter("");
+                setSortBy("title_asc");
+              }}
+            >
+              Reset
+            </button>
+          </div>
+
+          <div style={filterSummary}>
+            Risultati visualizzati: <strong>{totalFiltered}</strong>
+          </div>
         </div>
 
-        <div style={filterSummary}>
-          Risultati visualizzati: <strong>{totalFiltered}</strong>
-        </div>
-      </div>
-
-      {loading ? (
-        <div style={emptyBox}>Caricamento prodotti...</div>
-      ) : filtered.length === 0 ? (
-        <div style={emptyBox}>
-          {search.trim() || stockFilter !== "all" || locationFilter
-            ? "Nessun articolo trovato con i filtri attuali."
-            : "Nessun articolo presente in magazzino."}
-        </div>
-      ) : (
-        <div style={tableWrap}>
-          <table style={table}>
-            <thead>
-              <tr style={theadRow}>
-                <th style={th}>Nome</th>
-                <th style={th}>Descrizione</th>
-                <th style={th}>EAN</th>
-                <th style={th}>Posizione</th>
-                <th style={th}>Stato</th>
-                <th style={thCenter}>Q.tà</th>
-                <th style={thRight}>B2B</th>
-                <th style={thRight}>B2C</th>
-                <th style={thRight}>Valore</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {filtered.map((p) => {
-                const status = getStockStatus(p);
-
-                return (
-                  <tr
-                    key={p.id}
-                    onClick={() => setEditProduct(p)}
-                    style={{
-                      ...tableRow,
-                      ...(Number(p.warehouse_qty || 0) <= LOW_STOCK_THRESHOLD
-                        ? lowStockRow
-                        : {}),
-                    }}
-                  >
-                    <td style={td}>
-                      <div style={titleCell}>{p.title}</div>
-                    </td>
-
-                    <td style={tdMuted}>{p.description || "-"}</td>
-                    <td style={td}>{p.ean || "-"}</td>
-                    <td style={td}>{p.location || "-"}</td>
-
-                    <td style={td}>
-                      <span style={{ ...stockBadgeBase, ...status.style }}>
-                        {status.label}
-                      </span>
-                    </td>
-
-                    <td style={tdCenter}>{p.warehouse_qty || 0}</td>
-                    <td style={tdRight}>{formatCurrency(p.price_b2b)}</td>
-                    <td style={tdRight}>{formatCurrency(p.price_b2c)}</td>
-                    <td style={tdRightStrong}>{formatCurrency(stockValue(p))}</td>
+        <div className="inventory-results-body">
+          {loading ? (
+            <div className="inventory-results-empty" style={emptyBox}>
+              Caricamento prodotti...
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="inventory-results-empty" style={emptyBox}>
+              {search.trim() || stockFilter !== "all" || locationFilter || supplierFilter
+                ? "Nessun articolo trovato con i filtri attuali."
+                : "Nessun articolo presente in magazzino."}
+            </div>
+          ) : (
+            <div className="apple-table-wrap inventory-results-table" style={tableWrap}>
+              <table style={table}>
+                <thead>
+                  <tr style={theadRow}>
+                    <th style={th}>Nome</th>
+                    <th style={th}>Fornitore</th>
+                    <th style={th}>Descrizione</th>
+                    <th style={th}>EAN</th>
+                    <th style={th}>Posizione</th>
+                    <th style={th}>Stato</th>
+                    <th style={thCenter}>Q.tà</th>
+                    <th style={thCenter}>Min</th>
+                    <th style={thCenter}>Riordino</th>
+                    <th style={thRight}>B2B</th>
+                    <th style={thRight}>B2C</th>
+                    <th style={thRight}>Valore</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+
+                <tbody>
+                  {filtered.map((p) => {
+                    const status = getStockStatus(p);
+                    const qty = Number(p.warehouse_qty || 0);
+                    const min = Number(p.min_stock || 0);
+                    const isLow = qty > 0 && qty <= min;
+
+                    return (
+                      <tr
+                        key={p.id}
+                        onClick={() => setEditProduct(p)}
+                        style={{
+                          ...tableRow,
+                          ...(isLow ? lowStockRow : {}),
+                        }}
+                      >
+                        <td style={td}>
+                          <div style={titleCell}>{p.title}</div>
+                        </td>
+                        <td style={td}>{p.supplier || "-"}</td>
+                        <td style={tdMuted}>{p.description || "-"}</td>
+                        <td style={td}>{p.ean || "-"}</td>
+                        <td style={td}>{p.location || "-"}</td>
+                        <td style={td}>
+                          <span
+                            className={`inventory-stock-badge ${status.tone === "out"
+                              ? "inventory-stock-badge--out"
+                              : status.tone === "low"
+                                ? "inventory-stock-badge--low"
+                                : "inventory-stock-badge--ok"
+                              }`}
+                          >
+                            {status.label}
+                          </span>
+                        </td>
+                        <td style={tdCenter}>{p.warehouse_qty || 0}</td>
+                        <td style={tdCenter}>{p.min_stock || 0}</td>
+                        <td style={tdCenter}>{p.reorder_qty || 0}</td>
+                        <td style={tdRight}>{formatCurrency(p.price_b2b)}</td>
+                        <td style={tdRight}>{formatCurrency(p.price_b2c)}</td>
+                        <td style={tdRightStrong}>{formatCurrency(stockValue(p))}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {editProduct && (
         <Modal title="Modifica articolo" onClose={() => setEditProduct(null)}>
-          <div style={modalHeaderBox}>
-            <div style={modalIcon}>📦</div>
+          <div className="inventory-modal-header-clean">
+            <div className="inventory-modal-icon-clean">
+              <Package2 size={24} strokeWidth={2} />
+            </div>
             <div>
-              <div style={modalTitle}>Scheda articolo</div>
-              <div style={modalSubtitle}>
-                Aggiorna dati, quantità, posizione e prezzi del prodotto.
+              <div className="inventory-modal-title-clean">Scheda articolo</div>
+              <div className="inventory-modal-subtitle-clean">
+                Aggiorna dati, quantità, scorta minima, riordino e prezzi del prodotto.
               </div>
             </div>
           </div>
 
-          <div style={formGrid2}>
-            <div style={field}>
-              <label style={label}>Nome prodotto</label>
+          <div className="inventory-modal-grid-2-clean">
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Nome prodotto</label>
               <input
-                style={input}
+                className="apple-input inventory-modal-input-clean"
                 value={editProduct.title || ""}
                 onChange={(e) =>
                   setEditProduct({ ...editProduct, title: e.target.value })
@@ -547,10 +681,10 @@ export default function InventoryPage() {
               />
             </div>
 
-            <div style={field}>
-              <label style={label}>EAN</label>
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">EAN</label>
               <input
-                style={input}
+                className="apple-input inventory-modal-input-clean"
                 value={editProduct.ean || ""}
                 onChange={(e) =>
                   setEditProduct({ ...editProduct, ean: e.target.value })
@@ -559,23 +693,46 @@ export default function InventoryPage() {
             </div>
           </div>
 
-          <div style={formGrid2}>
-            <div style={field}>
-              <label style={label}>Posizione scaffale</label>
+          <div className="inventory-modal-grid-2-clean">
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Fornitore</label>
+              <select
+                className="apple-input inventory-modal-input-clean inventory-modal-select-clean"
+                value={editProduct.supplier || ""}
+                onChange={(e) =>
+                  setEditProduct({ ...editProduct, supplier: e.target.value || null })
+                }
+              >
+                <option value="">Nessun fornitore</option>
+                {editProduct.supplier && !suppliers.includes(editProduct.supplier) && (
+                  <option value={editProduct.supplier}>{editProduct.supplier}</option>
+                )}
+                {suppliers.map((supplier) => (
+                  <option key={supplier} value={supplier}>
+                    {supplier}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Posizione scaffale</label>
               <input
-                style={input}
+                className="apple-input inventory-modal-input-clean"
                 value={editProduct.location || ""}
                 onChange={(e) =>
                   setEditProduct({ ...editProduct, location: e.target.value })
                 }
               />
             </div>
+          </div>
 
-            <div style={field}>
-              <label style={label}>Quantità magazzino</label>
+          <div className="inventory-modal-grid-3-clean">
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Quantità magazzino</label>
               <input
                 type="number"
-                style={input}
+                className="apple-input inventory-modal-input-clean"
                 value={editProduct.warehouse_qty ?? 0}
                 onChange={(e) =>
                   setEditProduct({
@@ -585,12 +742,42 @@ export default function InventoryPage() {
                 }
               />
             </div>
+
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Scorta minima</label>
+              <input
+                type="number"
+                className="apple-input inventory-modal-input-clean"
+                value={editProduct.min_stock ?? 0}
+                onChange={(e) =>
+                  setEditProduct({
+                    ...editProduct,
+                    min_stock: Number(e.target.value),
+                  })
+                }
+              />
+            </div>
+
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Riordino consigliato</label>
+              <input
+                type="number"
+                className="apple-input inventory-modal-input-clean"
+                value={editProduct.reorder_qty ?? 0}
+                onChange={(e) =>
+                  setEditProduct({
+                    ...editProduct,
+                    reorder_qty: Number(e.target.value),
+                  })
+                }
+              />
+            </div>
           </div>
 
-          <div style={field}>
-            <label style={label}>Descrizione</label>
+          <div className="inventory-modal-field-clean inventory-modal-field-clean--full">
+            <label className="inventory-modal-label-clean">Descrizione</label>
             <textarea
-              style={textarea}
+              className="apple-textarea inventory-modal-textarea-clean"
               value={editProduct.description || ""}
               onChange={(e) =>
                 setEditProduct({
@@ -601,12 +788,13 @@ export default function InventoryPage() {
             />
           </div>
 
-          <div style={formGrid2}>
-            <div style={field}>
-              <label style={label}>Prezzo B2B</label>
+          <div className="inventory-modal-grid-2-clean">
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Prezzo B2B</label>
               <input
                 type="number"
-                style={input}
+                step="0.01"
+                className="apple-input inventory-modal-input-clean"
                 value={editProduct.price_b2b ?? 0}
                 onChange={(e) =>
                   setEditProduct({
@@ -617,11 +805,12 @@ export default function InventoryPage() {
               />
             </div>
 
-            <div style={field}>
-              <label style={label}>Prezzo B2C</label>
+            <div className="inventory-modal-field-clean">
+              <label className="inventory-modal-label-clean">Prezzo B2C</label>
               <input
                 type="number"
-                style={input}
+                step="0.01"
+                className="apple-input inventory-modal-input-clean"
                 value={editProduct.price_b2c ?? 0}
                 onChange={(e) =>
                   setEditProduct({
@@ -633,38 +822,50 @@ export default function InventoryPage() {
             </div>
           </div>
 
-          <div style={infoBox}>
-            <div style={infoRow}>
+          <div className="inventory-modal-info-clean">
+            <div className="inventory-modal-info-row-clean">
               <span>Stato scorte</span>
               <span
-                style={{
-                  ...stockBadgeBase,
-                  ...getStockStatus(editProduct).style,
-                }}
+                className={`inventory-stock-badge ${getStockStatus(editProduct).tone === "out"
+                    ? "inventory-stock-badge--out"
+                    : getStockStatus(editProduct).tone === "low"
+                      ? "inventory-stock-badge--low"
+                      : "inventory-stock-badge--ok"
+                  }`}
               >
                 {getStockStatus(editProduct).label}
               </span>
             </div>
 
-            <div style={infoRow}>
+            <div className="inventory-modal-info-row-clean">
+              <span>Scorta minima impostata</span>
+              <strong>{editProduct.min_stock || 0}</strong>
+            </div>
+
+            <div className="inventory-modal-info-row-clean">
+              <span>Riordino consigliato</span>
+              <strong>{editProduct.reorder_qty || 0}</strong>
+            </div>
+
+            <div className="inventory-modal-info-row-clean">
               <span>Valore prodotto a magazzino</span>
               <strong>{formatCurrency(stockValue(editProduct))}</strong>
             </div>
           </div>
 
-          <div style={footer}>
+                    <div className="inventory-modal-footer-clean">
             <button
               onClick={deleteProduct}
-              style={dangerButton}
+              className="inventory-modal-btn-danger-clean"
               disabled={deleting || saving}
             >
               {deleting ? "Eliminazione..." : "Elimina"}
             </button>
 
-            <div style={{ display: "flex", gap: 10 }}>
+            <div className="inventory-modal-footer-actions-clean">
               <button
                 onClick={() => setEditProduct(null)}
-                style={secondaryButton}
+                className="inventory-modal-btn-secondary-clean"
                 disabled={deleting || saving}
               >
                 Annulla
@@ -672,7 +873,7 @@ export default function InventoryPage() {
 
               <button
                 onClick={updateProduct}
-                style={primaryButton}
+                className="inventory-modal-btn-primary-clean"
                 disabled={saving || deleting}
               >
                 {saving ? "Salvataggio..." : "Salva"}
@@ -749,7 +950,7 @@ const counterValue: React.CSSProperties = {
 const filtersCard: React.CSSProperties = {
   background: "#fff",
   border: "1px solid #e2e8f0",
-  borderRadius: 18,
+  borderRadius: 0,
   padding: 16,
   marginBottom: 20,
   boxShadow: "0 8px 24px rgba(15,23,42,0.04)",
@@ -757,9 +958,9 @@ const filtersCard: React.CSSProperties = {
 
 const filtersGrid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "2fr 1fr 1fr 1fr auto",
+  gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr auto",
   gap: 12,
-  alignItems: "center",
+  alignItems: "stretch",
 };
 
 const filterSummary: React.CSSProperties = {
@@ -772,7 +973,7 @@ const searchInput: React.CSSProperties = {
   width: "100%",
   padding: "12px 14px",
   border: "1px solid #dbe2ea",
-  borderRadius: 12,
+  borderRadius: 0,
   fontSize: 14,
   outline: "none",
   background: "#fff",
@@ -780,19 +981,44 @@ const searchInput: React.CSSProperties = {
 
 const select: React.CSSProperties = {
   width: "100%",
-  padding: "12px 14px",
+  height: 44,
+  padding: "0 14px",
   border: "1px solid #dbe2ea",
-  borderRadius: 12,
+  borderRadius: 6,
   fontSize: 14,
   outline: "none",
   background: "#fff",
+  color: "#0f172a",
 };
 
 const clearFiltersButton: React.CSSProperties = {
-  padding: "12px 16px",
-  borderRadius: 12,
+  height: 44,
+  padding: "0 16px",
+  borderRadius: 6,
   border: "1px solid #d1d5db",
   background: "#f8fafc",
+  cursor: "pointer",
+  fontWeight: 700,
+  color: "#0f172a",
+  whiteSpace: "nowrap",
+};
+
+const importButton: React.CSSProperties = {
+  background: "#eef6ff",
+  color: "#1d4ed8",
+  border: "1px solid #bfdbfe",
+  padding: "11px 16px",
+  borderRadius: 10,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const warningButton: React.CSSProperties = {
+  background: "#fff7ed",
+  color: "#c2410c",
+  border: "1px solid #fdba74",
+  padding: "11px 16px",
+  borderRadius: 10,
   cursor: "pointer",
   fontWeight: 700,
 };
@@ -808,7 +1034,7 @@ const tableWrap: React.CSSProperties = {
 const table: React.CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
-  minWidth: 1080,
+  minWidth: 1420,
 };
 
 const theadRow: React.CSSProperties = {
@@ -848,6 +1074,7 @@ const td: React.CSSProperties = {
   padding: 14,
   color: "#0f172a",
   fontSize: 14,
+  verticalAlign: "top",
 };
 
 const tdMuted: React.CSSProperties = {
@@ -874,6 +1101,12 @@ const tdRightStrong: React.CSSProperties = {
 const titleCell: React.CSSProperties = {
   fontWeight: 700,
   color: "#0f172a",
+};
+
+const subCell: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#64748b",
 };
 
 const stockBadgeBase: React.CSSProperties = {
@@ -933,6 +1166,13 @@ const modalSubtitle: React.CSSProperties = {
 const formGrid2: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
+  gap: 18,
+  marginBottom: 18,
+};
+
+const formGrid3: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr 1fr",
   gap: 18,
   marginBottom: 18,
 };

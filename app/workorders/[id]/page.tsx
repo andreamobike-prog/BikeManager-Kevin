@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { supabase } from "../../../lib/supabase";
+import { supabase } from "@/lib/supabase";
+import { Printer, Wrench, ClipboardPenLine } from "lucide-react";
 
 type WorkOrder = {
   id: string;
@@ -22,6 +23,7 @@ type WorkOrder = {
     brand?: string | null;
     model?: string | null;
     serial?: string | null;
+    serial_number?: string | null;
     color?: string | null;
   } | null;
 };
@@ -51,6 +53,7 @@ type Service = {
   hours?: number | null;
   notes?: string | null;
   custom_price?: number | null;
+  billable?: boolean;
   service_date?: string | null;
 };
 
@@ -59,7 +62,7 @@ type Toast = {
   message: string;
 } | null;
 
-export default function WorkOrderDetail() {
+export default function WorkOrderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = String(params.id);
@@ -74,6 +77,7 @@ export default function WorkOrderDetail() {
   const [loading, setLoading] = useState(true);
   const [savingPart, setSavingPart] = useState(false);
   const [savingService, setSavingService] = useState(false);
+  const [rowUpdatingId, setRowUpdatingId] = useState<string | null>(null);
 
   const [showPartsModal, setShowPartsModal] = useState(false);
   const [partSearch, setPartSearch] = useState("");
@@ -96,8 +100,16 @@ export default function WorkOrderDetail() {
 
   const [toast, setToast] = useState<Toast>(null);
 
+  const [partQtyDrafts, setPartQtyDrafts] = useState<Record<string, string>>({});
+  const [partPriceDrafts, setPartPriceDrafts] = useState<Record<string, string>>({});
+
+  const [serviceHoursDrafts, setServiceHoursDrafts] = useState<Record<string, string>>({});
+  const [servicePriceDrafts, setServicePriceDrafts] = useState<Record<string, string>>({});
+
   useEffect(() => {
-    if (id) loadData();
+    if (id) {
+      loadData();
+    }
   }, [id]);
 
   useEffect(() => {
@@ -110,10 +122,10 @@ export default function WorkOrderDetail() {
     setLoading(true);
 
     const [
-      { data: orderData },
-      { data: productData },
-      { data: partsData },
-      { data: servicesData },
+      { data: orderData, error: orderError },
+      { data: productData, error: productError },
+      { data: partsData, error: partsError },
+      { data: servicesData, error: servicesError },
     ] = await Promise.all([
       supabase
         .from("work_orders")
@@ -126,15 +138,49 @@ export default function WorkOrderDetail() {
         )
         .eq("id", id)
         .single(),
-      supabase.from("products").select("*"),
-      supabase.from("work_order_parts").select("*").eq("work_order_id", id),
-      supabase.from("work_order_services").select("*").eq("work_order_id", id),
+      supabase.from("products").select("*").order("title", { ascending: true }),
+      supabase
+        .from("work_order_parts")
+        .select("*")
+        .eq("work_order_id", id)
+        .order("id", { ascending: true }),
+      supabase
+        .from("work_order_services")
+        .select("*")
+        .eq("work_order_id", id)
+        .order("service_date", { ascending: true }),
     ]);
+
+    if (orderError) {
+      console.error("Errore caricamento work order:", orderError);
+      setToast({
+        type: "error",
+        message: `Errore caricamento scheda: ${orderError.message}`,
+      });
+      setLoading(false);
+      return;
+    }
+
+    if (productError) {
+      console.error("Errore caricamento prodotti:", productError);
+    }
+
+    if (partsError) {
+      console.error("Errore caricamento ricambi:", partsError);
+    }
+
+    if (servicesError) {
+      console.error("Errore caricamento interventi:", servicesError);
+    }
 
     setOrder((orderData as WorkOrder) || null);
     setProducts((productData as Product[]) || []);
     setParts((partsData as Part[]) || []);
     setServices((servicesData as Service[]) || []);
+    setPartQtyDrafts({});
+    setPartPriceDrafts({});
+    setServiceHoursDrafts({});
+    setServicePriceDrafts({});
     setLoading(false);
   }
 
@@ -149,20 +195,76 @@ export default function WorkOrderDetail() {
   const filteredProducts =
     partSearch.trim().length >= 2
       ? products.filter((p) => {
-          const q = partSearch.toLowerCase();
-          return (
-            p.title?.toLowerCase().includes(q) ||
-            p.ean?.toLowerCase().includes(q)
-          );
-        })
+        const q = partSearch.toLowerCase();
+        return (
+          (p.title || "").toLowerCase().includes(q) ||
+          (p.ean || "").toLowerCase().includes(q)
+        );
+      })
       : [];
 
+  async function upsertPartMovement(productId: string, finalQty: number) {
+    const { data: movementRows, error: readError } = await supabase
+      .from("inventory_movements")
+      .select("id")
+      .eq("product_id", productId)
+      .eq("work_order_id", id)
+      .eq("type", "officina");
+
+    if (readError) {
+      return { error: readError };
+    }
+
+    if (!movementRows || movementRows.length === 0) {
+      const { error } = await supabase.from("inventory_movements").insert({
+        product_id: productId,
+        quantity: -finalQty,
+        type: "officina",
+        work_order_id: id,
+      });
+
+      return { error };
+    }
+
+    const movementId = movementRows[0].id;
+
+    const { error } = await supabase
+      .from("inventory_movements")
+      .update({
+        quantity: -finalQty,
+      })
+      .eq("id", movementId);
+
+    return { error };
+  }
+
   async function savePart() {
-    if (!selectedProduct) return;
+    if (!selectedProduct) {
+      setToast({ type: "error", message: "Seleziona un prodotto." });
+      return;
+    }
+
+    const existingPart = parts.find((part) => part.product_id === selectedProduct.id);
+    if (existingPart) {
+      setToast({
+        type: "info",
+        message: "Questo ricambio è già presente. Modifica la quantità direttamente nella riga.",
+      });
+      return;
+    }
 
     const qty = Number(partForm.quantity) || 1;
     if (qty <= 0) {
       setToast({ type: "error", message: "Inserisci una quantità valida." });
+      return;
+    }
+
+    const stock = Number(selectedProduct.warehouse_qty || 0);
+    if (stock < qty) {
+      setToast({
+        type: "error",
+        message: `Magazzino insufficiente. Disponibili: ${stock}`,
+      });
       return;
     }
 
@@ -172,7 +274,7 @@ export default function WorkOrderDetail() {
       work_order_id: id,
       product_id: selectedProduct.id,
       quantity: qty,
-      price_snapshot: selectedProduct.price_b2c,
+      price_snapshot: selectedProduct.price_b2c ?? 0,
       custom_price:
         partForm.custom_price !== "" ? Number(partForm.custom_price) : null,
       billable: true,
@@ -180,35 +282,43 @@ export default function WorkOrderDetail() {
 
     if (partError) {
       console.error("Errore inserimento ricambio:", partError);
-      setToast({ type: "error", message: "Errore inserimento ricambio." });
+      setToast({
+        type: "error",
+        message: `Errore inserimento ricambio: ${partError.message}`,
+      });
       setSavingPart(false);
       return;
     }
 
-    const newQty = (selectedProduct.warehouse_qty || 0) - qty;
-
     const { error: stockError } = await supabase
       .from("products")
       .update({
-        warehouse_qty: newQty,
+        warehouse_qty: stock - qty,
       })
       .eq("id", selectedProduct.id);
 
     if (stockError) {
       console.error("Errore update magazzino:", stockError);
+      setToast({
+        type: "error",
+        message: `Ricambio inserito ma errore magazzino: ${stockError.message}`,
+      });
+      setSavingPart(false);
+      await loadData();
+      return;
     }
 
-    const { error: movementError } = await supabase
-      .from("inventory_movements")
-      .insert({
-        product_id: selectedProduct.id,
-        quantity: -qty,
-        type: "officina",
-        work_order_id: id,
-      });
+    const { error: movementError } = await upsertPartMovement(selectedProduct.id, qty);
 
     if (movementError) {
-      console.error("Errore movimento:", movementError);
+      console.error("Errore inserimento movimento:", movementError);
+      setToast({
+        type: "error",
+        message: `Ricambio inserito ma errore movimento magazzino: ${movementError.message}`,
+      });
+      setSavingPart(false);
+      await loadData();
+      return;
     }
 
     setShowPartsModal(false);
@@ -228,27 +338,68 @@ export default function WorkOrderDetail() {
     const part = parts.find((p) => p.id === partId);
     if (!part) return;
 
+    const ok = window.confirm("Eliminare questo ricambio dalla scheda?");
+    if (!ok) return;
+
+    setRowUpdatingId(partId);
+
     const product = productsMap[part.product_id];
+    const currentStock = Number(product?.warehouse_qty || 0);
+    const restoreQty = Number(part.quantity || 0);
 
-    await supabase.from("work_order_parts").delete().eq("id", partId);
+    const { error: deletePartError } = await supabase
+      .from("work_order_parts")
+      .delete()
+      .eq("id", partId);
 
-    const newQty = (product?.warehouse_qty || 0) + part.quantity;
+    if (deletePartError) {
+      console.error("Errore eliminazione ricambio:", deletePartError);
+      setToast({
+        type: "error",
+        message: `Errore eliminazione ricambio: ${deletePartError.message}`,
+      });
+      setRowUpdatingId(null);
+      return;
+    }
 
-    await supabase
+    const { error: restoreStockError } = await supabase
       .from("products")
       .update({
-        warehouse_qty: newQty,
+        warehouse_qty: currentStock + restoreQty,
       })
       .eq("id", part.product_id);
 
-    await supabase
+    if (restoreStockError) {
+      console.error("Errore ripristino stock:", restoreStockError);
+      setToast({
+        type: "error",
+        message: `Ricambio eliminato ma errore ripristino magazzino: ${restoreStockError.message}`,
+      });
+      setRowUpdatingId(null);
+      await loadData();
+      return;
+    }
+
+    const { error: deleteMovementError } = await supabase
       .from("inventory_movements")
       .delete()
       .eq("product_id", part.product_id)
       .eq("work_order_id", id)
       .eq("type", "officina");
 
+    if (deleteMovementError) {
+      console.error("Errore rimozione movimento:", deleteMovementError);
+      setToast({
+        type: "error",
+        message: `Ricambio eliminato ma errore movimento magazzino: ${deleteMovementError.message}`,
+      });
+      setRowUpdatingId(null);
+      await loadData();
+      return;
+    }
+
     await loadData();
+    setRowUpdatingId(null);
 
     setToast({
       type: "success",
@@ -257,30 +408,335 @@ export default function WorkOrderDetail() {
   }
 
   async function updateQty(partId: string, qty: number) {
-    await supabase
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setToast({
+        type: "error",
+        message: "La quantità deve essere maggiore di zero.",
+      });
+      return false;
+    }
+
+    const part = parts.find((p) => p.id === partId);
+    if (!part) {
+      setToast({
+        type: "error",
+        message: "Ricambio non trovato.",
+      });
+      return false;
+    }
+
+    const product = productsMap[part.product_id];
+    if (!product) {
+      setToast({
+        type: "error",
+        message: "Prodotto non trovato.",
+      });
+      return false;
+    }
+
+    const oldQty = Number(part.quantity || 0);
+    if (qty === oldQty) {
+      return true;
+    }
+
+    const currentStock = Number(product.warehouse_qty || 0);
+    const delta = qty - oldQty;
+    const newStock = currentStock - delta;
+
+    if (newStock < 0) {
+      setToast({
+        type: "error",
+        message: `Quantità non disponibile. Disponibili: ${currentStock}`,
+      });
+      return false;
+    }
+
+    setRowUpdatingId(partId);
+
+    const { data: updatedPart, error: partError } = await supabase
       .from("work_order_parts")
       .update({ quantity: qty })
-      .eq("id", partId);
+      .eq("id", partId)
+      .select("id, quantity, product_id")
+      .single();
 
-    loadData();
+    if (partError || !updatedPart) {
+      console.error("Errore update quantità riga:", partError);
+      setToast({
+        type: "error",
+        message: "Salvataggio quantità non riuscito.",
+      });
+      setRowUpdatingId(null);
+      return false;
+    }
+
+    const { data: updatedProduct, error: stockError } = await supabase
+      .from("products")
+      .update({ warehouse_qty: newStock })
+      .eq("id", part.product_id)
+      .select("id, warehouse_qty")
+      .single();
+
+    if (stockError || !updatedProduct) {
+      console.error("Errore update magazzino:", stockError);
+
+      await supabase
+        .from("work_order_parts")
+        .update({ quantity: oldQty })
+        .eq("id", partId);
+
+      setToast({
+        type: "error",
+        message: "Quantità non salvata: errore aggiornamento magazzino.",
+      });
+      setRowUpdatingId(null);
+      await loadData();
+      return false;
+    }
+
+    const { error: deleteMovementError } = await supabase
+      .from("inventory_movements")
+      .delete()
+      .eq("product_id", part.product_id)
+      .eq("work_order_id", id)
+      .eq("type", "officina");
+
+    if (deleteMovementError) {
+      console.error("Errore cancellazione vecchio movimento:", deleteMovementError);
+
+      await supabase
+        .from("work_order_parts")
+        .update({ quantity: oldQty })
+        .eq("id", partId);
+
+      await supabase
+        .from("products")
+        .update({ warehouse_qty: currentStock })
+        .eq("id", part.product_id);
+
+      setToast({
+        type: "error",
+        message: "Quantità non salvata: errore aggiornamento movimento.",
+      });
+      setRowUpdatingId(null);
+      await loadData();
+      return false;
+    }
+
+    const { error: insertMovementError } = await supabase
+      .from("inventory_movements")
+      .insert({
+        product_id: part.product_id,
+        work_order_id: id,
+        type: "officina",
+        quantity: -qty,
+      });
+
+    if (insertMovementError) {
+      console.error("Errore inserimento nuovo movimento:", insertMovementError);
+
+      await supabase
+        .from("work_order_parts")
+        .update({ quantity: oldQty })
+        .eq("id", partId);
+
+      await supabase
+        .from("products")
+        .update({ warehouse_qty: currentStock })
+        .eq("id", part.product_id);
+
+      await supabase
+        .from("inventory_movements")
+        .delete()
+        .eq("product_id", part.product_id)
+        .eq("work_order_id", id)
+        .eq("type", "officina");
+
+      await supabase
+        .from("inventory_movements")
+        .insert({
+          product_id: part.product_id,
+          work_order_id: id,
+          type: "officina",
+          quantity: -oldQty,
+        });
+
+      setToast({
+        type: "error",
+        message: "Quantità non salvata: errore aggiornamento movimento.",
+      });
+      setRowUpdatingId(null);
+      await loadData();
+      return false;
+    }
+
+    setRowUpdatingId(null);
+    return true;
   }
 
   async function updateCustomPrice(partId: string, price: number | null) {
-    await supabase
+    setRowUpdatingId(partId);
+
+    const { data: updatedPart, error } = await supabase
       .from("work_order_parts")
       .update({ custom_price: price })
-      .eq("id", partId);
+      .eq("id", partId)
+      .select("id, custom_price")
+      .single();
 
-    loadData();
+    if (error || !updatedPart) {
+      console.error("Errore update prezzo:", error);
+      setToast({
+        type: "error",
+        message: "Salvataggio prezzo non riuscito.",
+      });
+      setRowUpdatingId(null);
+      return false;
+    }
+
+    setToast({
+      type: "success",
+      message: "Prezzo salvato.",
+    });
+
+    await loadData();
+    setRowUpdatingId(null);
+    return true;
+  }
+
+  const hasPendingPartChanges = useMemo(() => {
+    return parts.some((p) => {
+      const product = productsMap[p.product_id];
+      const listino = Number(p.price_snapshot ?? product?.price_b2c ?? 0);
+
+      const qtyDraft = partQtyDrafts[p.id];
+      const priceDraft = partPriceDrafts[p.id];
+
+      const qtyChanged =
+        qtyDraft !== undefined &&
+        Math.max(1, Number(qtyDraft) || 1) !== Number(p.quantity || 0);
+
+      const normalizedPriceDraft = (priceDraft ?? "").trim();
+      const effectiveCurrentPrice = Number(p.custom_price ?? listino);
+
+      const priceChanged =
+        priceDraft !== undefined &&
+        (
+          (normalizedPriceDraft === "" && p.custom_price !== null && p.custom_price !== undefined) ||
+          (normalizedPriceDraft !== "" &&
+            Number(normalizedPriceDraft.replace(",", ".")) !== effectiveCurrentPrice)
+        );
+
+      return qtyChanged || priceChanged;
+    });
+  }, [parts, productsMap, partQtyDrafts, partPriceDrafts]);
+
+  async function savePartsChanges() {
+    if (savingPart || rowUpdatingId) return;
+    if (!hasPendingPartChanges) {
+      setToast({
+        type: "info",
+        message: "Non ci sono modifiche da salvare nei ricambi.",
+      });
+      return;
+    }
+
+    setSavingPart(true);
+
+    for (const p of parts) {
+      const product = productsMap[p.product_id];
+      const listino = Number(p.price_snapshot ?? product?.price_b2c ?? 0);
+
+      const qtyDraft = partQtyDrafts[p.id];
+      const priceDraft = partPriceDrafts[p.id];
+
+      if (qtyDraft !== undefined) {
+        const nextQty = Math.max(1, Number(qtyDraft) || 1);
+        if (nextQty !== Number(p.quantity || 0)) {
+          const qtyOk = await updateQty(p.id, nextQty);
+          if (!qtyOk) {
+            setSavingPart(false);
+            return;
+          }
+        }
+      }
+
+      if (priceDraft !== undefined) {
+        const raw = priceDraft.trim();
+
+        if (raw === "") {
+          if (p.custom_price !== null && p.custom_price !== undefined) {
+            const priceOk = await updateCustomPrice(p.id, null);
+            if (!priceOk) {
+              setSavingPart(false);
+              return;
+            }
+          }
+        } else {
+          const parsed = Number(raw.replace(",", "."));
+
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            setToast({
+              type: "error",
+              message: "Uno dei prezzi inseriti non è valido.",
+            });
+            setSavingPart(false);
+            return;
+          }
+
+          const effectiveCurrentPrice = Number(p.custom_price ?? listino);
+          if (parsed !== effectiveCurrentPrice) {
+            const priceOk = await updateCustomPrice(p.id, parsed);
+            if (!priceOk) {
+              setSavingPart(false);
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    setPartQtyDrafts({});
+    setPartPriceDrafts({});
+    await loadData();
+    setSavingPart(false);
+
+    setToast({
+      type: "success",
+      message: "Ricambi salvati correttamente.",
+    });
   }
 
   async function toggleBillable(partId: string, current: boolean) {
-    await supabase
+    setRowUpdatingId(partId);
+
+    const { error } = await supabase
       .from("work_order_parts")
       .update({ billable: !current })
       .eq("id", partId);
 
-    loadData();
+    if (error) {
+      console.error("Errore update fatturabile:", error);
+      setToast({
+        type: "error",
+        message: `Errore update fatturabile: ${error.message}`,
+      });
+      setRowUpdatingId(null);
+      return;
+    }
+
+    setParts((prev) =>
+      prev.map((part) =>
+        part.id === partId
+          ? {
+            ...part,
+            billable: !current,
+          }
+          : part
+      )
+    );
+
+    setRowUpdatingId(null);
   }
 
   async function saveService() {
@@ -289,20 +745,34 @@ export default function WorkOrderDetail() {
       newService.custom_price !== "" ? Number(newService.custom_price) : null;
 
     if (!newService.title.trim()) {
-      setToast({ type: "error", message: "Inserisci il titolo dell’intervento." });
+      setToast({
+        type: "error",
+        message: "Inserisci il titolo dell’intervento.",
+      });
       return;
     }
 
     setSavingService(true);
 
-    await supabase.from("work_order_services").insert({
+    const { error } = await supabase.from("work_order_services").insert({
       work_order_id: id,
-      title: newService.title,
+      title: newService.title.trim(),
       hours,
-      notes: newService.notes,
+      notes: newService.notes.trim() || null,
       custom_price: customPrice,
-      service_date: newService.service_date,
+      billable: true,
+      service_date: newService.service_date || null,
     });
+
+    if (error) {
+      console.error("Errore inserimento intervento:", error);
+      setToast({
+        type: "error",
+        message: `Errore inserimento intervento: ${error.message}`,
+      });
+      setSavingService(false);
+      return;
+    }
 
     setShowServiceModal(false);
     setNewService({
@@ -323,8 +793,28 @@ export default function WorkOrderDetail() {
   }
 
   async function deleteService(serviceId: string) {
-    await supabase.from("work_order_services").delete().eq("id", serviceId);
+    const ok = window.confirm("Eliminare questo intervento?");
+    if (!ok) return;
+
+    setRowUpdatingId(serviceId);
+
+    const { error } = await supabase
+      .from("work_order_services")
+      .delete()
+      .eq("id", serviceId);
+
+    if (error) {
+      console.error("Errore eliminazione intervento:", error);
+      setToast({
+        type: "error",
+        message: `Errore eliminazione intervento: ${error.message}`,
+      });
+      setRowUpdatingId(null);
+      return;
+    }
+
     await loadData();
+    setRowUpdatingId(null);
 
     setToast({
       type: "success",
@@ -332,185 +822,508 @@ export default function WorkOrderDetail() {
     });
   }
 
-  const partsTotal = parts.reduce((acc, p) => {
-    const product = productsMap[p.product_id];
-    const listino = p.price_snapshot ?? product?.price_b2c ?? 0;
-    const price = p.custom_price ?? listino;
+  async function toggleServiceBillable(serviceId: string, current: boolean) {
+    setRowUpdatingId(serviceId);
 
-    return acc + price * p.quantity;
-  }, 0);
+    const { error } = await supabase
+      .from("work_order_services")
+      .update({ billable: !current })
+      .eq("id", serviceId);
 
-  const serviceTotal = services.reduce((acc, s) => {
-    const price = s.custom_price ?? ((s.hours || 0) * hourlyRate);
-    return acc + price;
-  }, 0);
+    if (error) {
+      console.error("Errore update fatturabile intervento:", error);
+      setToast({
+        type: "error",
+        message: `Errore update fatturabile intervento: ${error.message}`,
+      });
+      setRowUpdatingId(null);
+      return;
+    }
+
+    setServices((prev) =>
+      prev.map((service) =>
+        service.id === serviceId
+          ? {
+            ...service,
+            billable: !current,
+          }
+          : service
+      )
+    );
+
+    setRowUpdatingId(null);
+  }
+
+  const hasPendingServiceChanges = useMemo(() => {
+    return services.some((s) => {
+      const hoursDraft = serviceHoursDrafts[s.id];
+      const priceDraft = servicePriceDrafts[s.id];
+
+      const normalizedCurrentHours = Number(s.hours ?? 0);
+      const normalizedDraftHours =
+        hoursDraft !== undefined
+          ? Math.round((Number(hoursDraft.replace(",", ".")) || 0) * 2) / 2
+          : normalizedCurrentHours;
+
+      const hoursChanged =
+        hoursDraft !== undefined &&
+        normalizedDraftHours !== normalizedCurrentHours;
+
+      const effectiveCurrentPrice = Number(
+        s.custom_price ?? Number(s.hours || 0) * hourlyRate
+      );
+
+      const priceChanged =
+        priceDraft !== undefined &&
+        (
+          (priceDraft.trim() === "" &&
+            s.custom_price !== null &&
+            s.custom_price !== undefined) ||
+          (priceDraft.trim() !== "" &&
+            Number(priceDraft.replace(",", ".")) !== effectiveCurrentPrice)
+        );
+
+      return hoursChanged || priceChanged;
+    });
+  }, [services, serviceHoursDrafts, servicePriceDrafts, hourlyRate]);
+
+  async function updateServiceHours(serviceId: string, hours: number) {
+    if (!Number.isFinite(hours) || hours < 0) {
+      setToast({
+        type: "error",
+        message: "Le ore devono essere un valore valido.",
+      });
+      return false;
+    }
+
+    const normalizedHours = Math.round(hours * 2) / 2;
+
+    const { data: updatedService, error } = await supabase
+      .from("work_order_services")
+      .update({ hours: normalizedHours })
+      .eq("id", serviceId)
+      .select("id, hours")
+      .single();
+
+    if (error || !updatedService) {
+      console.error("Errore update ore intervento:", error);
+      setToast({
+        type: "error",
+        message: "Salvataggio ore non riuscito.",
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function updateServiceCustomPrice(serviceId: string, price: number | null) {
+    const { data: updatedService, error } = await supabase
+      .from("work_order_services")
+      .update({ custom_price: price })
+      .eq("id", serviceId)
+      .select("id, custom_price")
+      .single();
+
+    if (error || !updatedService) {
+      console.error("Errore update prezzo intervento:", error);
+      setToast({
+        type: "error",
+        message: "Salvataggio prezzo non riuscito.",
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function saveServicesChanges() {
+    if (savingService || rowUpdatingId) return;
+
+    if (!hasPendingServiceChanges) {
+      setToast({
+        type: "info",
+        message: "Non ci sono modifiche da salvare negli interventi.",
+      });
+      return;
+    }
+
+    setSavingService(true);
+
+    for (const s of services) {
+      const hoursDraft = serviceHoursDrafts[s.id];
+      const priceDraft = servicePriceDrafts[s.id];
+
+      if (hoursDraft !== undefined) {
+        const parsedHours = Number(hoursDraft.replace(",", "."));
+        const normalizedHours = Math.round((parsedHours || 0) * 2) / 2;
+
+        if (!Number.isFinite(parsedHours) || parsedHours < 0) {
+          setToast({
+            type: "error",
+            message: "Uno dei valori ore non è valido.",
+          });
+          setSavingService(false);
+          return;
+        }
+
+        if (normalizedHours !== Number(s.hours ?? 0)) {
+          const hoursOk = await updateServiceHours(s.id, normalizedHours);
+          if (!hoursOk) {
+            setSavingService(false);
+            return;
+          }
+        }
+      }
+
+      if (priceDraft !== undefined) {
+        const raw = priceDraft.trim();
+
+        if (raw === "") {
+          if (s.custom_price !== null && s.custom_price !== undefined) {
+            const priceOk = await updateServiceCustomPrice(s.id, null);
+            if (!priceOk) {
+              setSavingService(false);
+              return;
+            }
+          }
+        } else {
+          const parsed = Number(raw.replace(",", "."));
+
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            setToast({
+              type: "error",
+              message: "Uno dei prezzi inseriti non è valido.",
+            });
+            setSavingService(false);
+            return;
+          }
+
+          const effectiveCurrentPrice = Number(
+            s.custom_price ?? Number(s.hours || 0) * hourlyRate
+          );
+
+          if (parsed !== effectiveCurrentPrice) {
+            const priceOk = await updateServiceCustomPrice(s.id, parsed);
+            if (!priceOk) {
+              setSavingService(false);
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    setServiceHoursDrafts({});
+    setServicePriceDrafts({});
+    await loadData();
+    setSavingService(false);
+
+    setToast({
+      type: "success",
+      message: "Interventi salvati correttamente.",
+    });
+  }
+
+  const partsTotal = useMemo(() => {
+    return parts.reduce((acc, p) => {
+      const product = productsMap[p.product_id];
+      const listino = Number(p.price_snapshot ?? product?.price_b2c ?? 0);
+      const price = Number(p.custom_price ?? listino);
+      return acc + price * Number(p.quantity || 0);
+    }, 0);
+  }, [parts, productsMap]);
+
+  const serviceTotal = useMemo(() => {
+    return services.reduce((acc, s) => {
+      const price = Number(s.custom_price ?? Number(s.hours || 0) * hourlyRate);
+      return acc + price;
+    }, 0);
+  }, [services]);
 
   const total = partsTotal + serviceTotal;
 
-  if (!order || loading) {
-    return <div style={{ padding: 40 }}>Caricamento...</div>;
+  function formatCurrency(value: number | null | undefined) {
+    return new Intl.NumberFormat("it-IT", {
+      style: "currency",
+      currency: "EUR",
+    }).format(Number(value || 0));
   }
 
+  if (loading || !order) {
+    return <div className="workorder-detail-empty">Caricamento...</div>;
+  }
+
+  const bikeSerial = order.bikes?.serial || order.bikes?.serial_number || "-";
+
   return (
-    <div style={page}>
+    <div className="app-page-shell workorder-detail-shell">
       {toast && (
         <div
-          style={{
-            ...toastStyle,
-            ...(toast.type === "success"
-              ? toastSuccess
-              : toast.type === "error"
-              ? toastError
-              : toastInfo),
-          }}
+          className={`workorder-detail-toast ${toast.type === "success"
+            ? "workorder-detail-toast--success"
+            : toast.type === "error"
+              ? "workorder-detail-toast--error"
+              : "workorder-detail-toast--info"
+            }`}
         >
           {toast.message}
         </div>
       )}
 
-      <div style={header}>
-        <div>
-          <div style={breadcrumb}>Schede officina / Dettaglio</div>
-          <h1 style={title}>Scheda lavoro</h1>
-          <p style={subtitle}>
+      <div className="page-header workorder-detail-header">
+        <div className="page-header__left">
+          <div className="apple-kicker">Schede officina / Dettaglio</div>
+          <h1 className="apple-page-title">Scheda lavoro</h1>
+          <p className="apple-page-subtitle workorder-detail-subtitle">
             Gestisci ricambi, interventi e totale cliente in modo chiaro e rapido.
           </p>
         </div>
 
-        <button
-          onClick={() => router.push(`/workorders/${id}/report`)}
-          style={printBtn}
-        >
-          🖨 Versione stampabile
-        </button>
+        <div className="page-header__right workorder-detail-header-actions">
+          <button
+            onClick={() => router.push("/workorders")}
+            className="btn-secondary"
+          >
+            ← Torna alle schede
+          </button>
+
+          <button
+            onClick={() => router.push(`/workorders/${id}/report`)}
+            className="btn-primary workorder-detail-print-btn"
+          >
+            <Printer size={16} strokeWidth={2.2} />
+            <span>Stampa scheda</span>
+          </button>
+        </div>
       </div>
 
-      <div style={infoGrid}>
-        <div style={infoCardWide}>
-          <div style={sectionTitle}>Cliente e bici</div>
+      <div className="workorder-detail-info-grid">
+        <div className="workorder-detail-card workorder-detail-card--wide">
+          <div className="workorder-detail-card-title">Cliente e bici</div>
 
-          <div style={infoRows}>
+          <div className="workorder-detail-info-rows">
             <InfoRow label="Cliente" value={order.customers?.name || "-"} />
             <InfoRow label="Telefono" value={order.customers?.phone || "-"} />
+            <InfoRow label="Email" value={order.customers?.email || "-"} />
             <InfoRow
               label="Bici"
-              value={`${order.bikes?.brand || "-"} ${order.bikes?.model || ""}`}
+              value={`${order.bikes?.brand || "-"} ${order.bikes?.model || ""}`.trim()}
             />
-            <InfoRow label="Telaio" value={order.bikes?.serial || "-"} />
+            <InfoRow label="Telaio" value={bikeSerial} />
             <InfoRow label="Note" value={order.notes || "-"} />
           </div>
         </div>
 
-        <div style={summaryCard}>
-          <div style={sectionTitle}>Riepilogo economico</div>
+        <div className="workorder-detail-card workorder-detail-summary-card">
+          <div className="workorder-detail-card-title">Riepilogo economico</div>
 
-          <div style={moneyRow}>
+          <div className="workorder-detail-money-row">
             <span>Ricambi</span>
-            <strong>{partsTotal.toFixed(2)} €</strong>
+            <strong>{formatCurrency(partsTotal)}</strong>
           </div>
 
-          <div style={moneyRow}>
+          <div className="workorder-detail-money-row">
             <span>Manodopera</span>
-            <strong>{serviceTotal.toFixed(2)} €</strong>
+            <strong>{formatCurrency(serviceTotal)}</strong>
           </div>
 
-          <div style={divider} />
+          <div className="workorder-detail-divider" />
 
-          <div style={totalRow}>
+          <div className="workorder-detail-total-row">
             <span>Totale cliente</span>
-            <strong>{total.toFixed(2)} €</strong>
+            <strong>{formatCurrency(total)}</strong>
           </div>
         </div>
       </div>
 
-      <section style={sectionCard}>
-        <div style={sectionHeader}>
+      <section className="workorder-detail-section-card">
+        <div className="workorder-detail-section-header">
           <div>
-            <h2 style={sectionHeading}>Ricambi utilizzati</h2>
-            <p style={sectionText}>
+            <h2 className="workorder-detail-section-heading">Ricambi utilizzati</h2>
+            <p className="workorder-detail-section-text">
               Aggiungi ricambi alla scheda e gestisci prezzo, quantità e fatturazione.
             </p>
           </div>
 
-          <button onClick={() => setShowPartsModal(true)} style={primaryBtn}>
-            + Aggiungi ricambio
-          </button>
+          <div className="workorder-detail-section-actions">
+            <button
+              type="button"
+              className="workorder-detail-save-btn"
+              onClick={savePartsChanges}
+              disabled={savingPart || !hasPendingPartChanges}
+            >
+              {savingPart ? "Salvataggio..." : "Salva"}
+            </button>
+            <button
+              onClick={() => setShowPartsModal(true)}
+              className="btn-primary workorder-detail-add-btn"
+            >
+              + Aggiungi ricambio
+            </button>
+          </div>
         </div>
 
         {parts.length === 0 ? (
-          <div style={emptyBox}>Nessun ricambio associato a questa scheda.</div>
+          <div className="workorder-detail-empty">
+            Nessun ricambio associato a questa scheda.
+          </div>
         ) : (
-          <div style={tableWrap}>
-            <table style={table}>
+          <div className="workorder-detail-table-wrap">
+            <table className="workorder-detail-table">
               <thead>
                 <tr>
-                  <th style={th}>Prodotto</th>
-                  <th style={th}>Qtà</th>
-                  <th style={th}>Prezzo</th>
-                  <th style={th}>Fattura</th>
-                  <th style={th}>Totale</th>
-                  <th style={th}>Azioni</th>
+                  <th>Prodotto</th>
+                  <th>Qtà</th>
+                  <th>Prezzo</th>
+                  <th>Fattura</th>
+                  <th>Totale</th>
+                  <th>Azioni</th>
                 </tr>
               </thead>
 
               <tbody>
                 {parts.map((p) => {
                   const product = productsMap[p.product_id];
-                  const listino = p.price_snapshot ?? product?.price_b2c ?? 0;
-                  const price = p.custom_price ?? listino;
+                  const listino = Number(p.price_snapshot ?? product?.price_b2c ?? 0);
+
+                  const currentQtyText =
+                    partQtyDrafts[p.id] !== undefined
+                      ? partQtyDrafts[p.id]
+                      : String(p.quantity);
+
+                  const currentQty = Math.max(1, Number(currentQtyText) || 1);
+
+                  const currentPriceText =
+                    partPriceDrafts[p.id] !== undefined
+                      ? partPriceDrafts[p.id]
+                      : String(Number(p.custom_price ?? listino).toFixed(2)).replace(".", ",");
+
+                  const parsedCurrentPrice =
+                    Number(currentPriceText.replace(",", ".")) || 0;
 
                   return (
-                    <tr key={p.id} style={row}>
-                      <td style={td}>
-                        <div style={cellTitle}>{product?.title || "-"}</div>
-                        <div style={cellSub}>EAN: {product?.ean || "-"}</div>
+                    <tr key={p.id}>
+                      <td>
+                        <div className="workorder-detail-cell-title">
+                          {product?.title || "-"}
+                        </div>
+                        <div className="workorder-detail-cell-sub">
+                          EAN: {product?.ean || "-"}
+                        </div>
                       </td>
 
-                      <td style={td}>
+                      <td>
                         <input
                           type="number"
-                          value={p.quantity}
-                          onChange={(e) => updateQty(p.id, Number(e.target.value))}
-                          style={smallInput}
+                          min={1}
+                          step={1}
+                          inputMode="numeric"
+                          value={currentQtyText}
+                          onChange={(e) => {
+                            setPartQtyDrafts((prev) => ({
+                              ...prev,
+                              [p.id]: e.target.value,
+                            }));
+                          }}
+                          onBlur={(e) => {
+                            const raw = e.target.value.trim();
+                            const nextQty = Math.max(1, Number(raw) || 1);
+
+                            setPartQtyDrafts((prev) => ({
+                              ...prev,
+                              [p.id]: String(nextQty),
+                            }));
+                          }}
+                          className="workorder-detail-small-input"
+                          disabled={rowUpdatingId === p.id}
                         />
                       </td>
 
-                      <td style={td}>
-                        <div style={priceBox}>
-                          <div style={oldPrice}>{listino} €</div>
+                      <td>
+                        <div className="workorder-detail-price-box">
                           <input
-                            type="number"
-                            value={p.custom_price ?? ""}
-                            placeholder={String(listino)}
-                            onChange={(e) =>
-                              updateCustomPrice(
-                                p.id,
-                                e.target.value === "" ? null : Number(e.target.value)
-                              )
-                            }
-                            style={smallInput}
+                            type="text"
+                            inputMode="decimal"
+                            value={currentPriceText}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d,]/g, "");
+                              const normalized = raw.includes(",")
+                                ? `${raw.split(",")[0]},${raw.split(",").slice(1).join("")}`
+                                : raw;
+
+                              setPartPriceDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: normalized,
+                              }));
+                            }}
+                            onBlur={() => {
+                              const raw = (partPriceDrafts[p.id] ?? "").trim();
+
+                              if (raw === "") {
+                                setPartPriceDrafts((prev) => ({
+                                  ...prev,
+                                  [p.id]: "",
+                                }));
+                                return;
+                              }
+
+                              const parsed = Number(raw.replace(",", "."));
+
+                              if (!Number.isFinite(parsed) || parsed < 0) {
+                                setToast({
+                                  type: "error",
+                                  message: "Inserisci un prezzo valido.",
+                                });
+
+                                setPartPriceDrafts((prev) => ({
+                                  ...prev,
+                                  [p.id]: String(
+                                    Number(p.custom_price ?? listino).toFixed(2)
+                                  ).replace(".", ","),
+                                }));
+                                return;
+                              }
+
+                              setPartPriceDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: String(parsed.toFixed(2)).replace(".", ","),
+                              }));
+                            }}
+                            className={`workorder-detail-small-input-wide ${p.custom_price === null || p.custom_price === undefined
+                              ? "workorder-detail-small-input-wide--muted"
+                              : "workorder-detail-small-input-wide--active"
+                              }`}
+                            disabled={rowUpdatingId === p.id}
                           />
                         </div>
                       </td>
 
-                      <td style={td}>
-                        <label style={checkboxWrap}>
+                      <td>
+                        <label className="workorder-detail-checkbox-wrap">
                           <input
                             type="checkbox"
-                            checked={p.billable}
+                            checked={Boolean(p.billable)}
                             onChange={() => toggleBillable(p.id, p.billable)}
+                            disabled={rowUpdatingId === p.id}
                           />
                           <span>{p.billable ? "Fatturabile" : "Interno"}</span>
                         </label>
                       </td>
 
-                      <td style={td}>
-                        <strong>{(price * p.quantity).toFixed(2)} €</strong>
+                      <td>
+                        <strong>
+                          {formatCurrency(parsedCurrentPrice * currentQty)}
+                        </strong>
                       </td>
 
-                      <td style={td}>
-                        <button style={dangerGhostBtn} onClick={() => deletePart(p.id)}>
-                          Elimina
+                      <td>
+                        <button
+                          className="workorder-detail-danger-btn"
+                          onClick={() => deletePart(p.id)}
+                          disabled={rowUpdatingId === p.id}
+                        >
+                          {rowUpdatingId === p.id ? "..." : "Elimina"}
                         </button>
                       </td>
                     </tr>
@@ -522,57 +1335,195 @@ export default function WorkOrderDetail() {
         )}
       </section>
 
-      <section style={sectionCard}>
-        <div style={sectionHeader}>
+      <section className="workorder-detail-section-card">
+        <div className="workorder-detail-section-header">
           <div>
-            <h2 style={sectionHeading}>Interventi</h2>
-            <p style={sectionText}>
+            <h2 className="workorder-detail-section-heading">Interventi</h2>
+            <p className="workorder-detail-section-text">
               Inserisci lavorazioni, ore e prezzo manuale quando necessario.
             </p>
           </div>
 
-          <button onClick={() => setShowServiceModal(true)} style={primaryBtn}>
-            + Aggiungi intervento
-          </button>
+          <div className="workorder-detail-section-actions">
+            <button
+              type="button"
+              className="workorder-detail-save-btn"
+              onClick={saveServicesChanges}
+              disabled={savingService || !hasPendingServiceChanges}
+            >
+              {savingService ? "Salvataggio..." : "Salva"}
+            </button>
+            <button
+              onClick={() => setShowServiceModal(true)}
+              className="btn-primary workorder-detail-add-btn"
+            >
+              + Aggiungi intervento
+            </button>
+
+          </div>
         </div>
 
         {services.length === 0 ? (
-          <div style={emptyBox}>Nessun intervento registrato.</div>
+          <div className="workorder-detail-empty">Nessun intervento registrato.</div>
         ) : (
-          <div style={tableWrap}>
-            <table style={table}>
+          <div className="workorder-detail-table-wrap">
+            <table className="workorder-detail-table">
               <thead>
                 <tr>
-                  <th style={th}>Data</th>
-                  <th style={th}>Intervento</th>
-                  <th style={th}>Ore</th>
-                  <th style={th}>Note</th>
-                  <th style={th}>Prezzo</th>
-                  <th style={th}>Azioni</th>
+                  <th>Data</th>
+                  <th>Intervento</th>
+                  <th>Ore</th>
+                  <th>Note</th>
+                  <th>Prezzo</th>
+                  <th>Fattura</th>
+                  <th>Azioni</th>
                 </tr>
               </thead>
 
               <tbody>
                 {services.map((s) => {
-                  const price = s.custom_price ?? ((s.hours || 0) * hourlyRate);
+                  const currentHoursText =
+                    serviceHoursDrafts[s.id] !== undefined
+                      ? serviceHoursDrafts[s.id]
+                      : String(Number(s.hours ?? 0).toFixed(1)).replace(".0", "");
+
+                  const parsedCurrentHours = Number(currentHoursText.replace(",", ".")) || 0;
+
+                  const currentPriceText =
+                    servicePriceDrafts[s.id] !== undefined
+                      ? servicePriceDrafts[s.id]
+                      : String(
+                        Number(
+                          s.custom_price ?? Number(s.hours || 0) * hourlyRate
+                        ).toFixed(2)
+                      ).replace(".", ",");
+
+                  const parsedCurrentPrice =
+                    Number(currentPriceText.replace(",", ".")) || 0;
 
                   return (
-                    <tr key={s.id} style={row}>
-                      <td style={td}>{s.service_date || "-"}</td>
-                      <td style={td}>
-                        <div style={cellTitle}>{s.title}</div>
+                    <tr key={s.id}>
+                      <td>{s.service_date || "-"}</td>
+                      <td>
+                        <div className="workorder-detail-cell-title">{s.title}</div>
                       </td>
-                      <td style={td}>{s.hours}</td>
-                      <td style={td}>{s.notes || "-"}</td>
-                      <td style={td}>
-                        <strong>{price.toFixed(2)} €</strong>
+                      <td>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          inputMode="decimal"
+                          value={currentHoursText}
+                          onChange={(e) => {
+                            setServiceHoursDrafts((prev) => ({
+                              ...prev,
+                              [s.id]: e.target.value,
+                            }));
+                          }}
+                          onBlur={(e) => {
+                            const raw = e.target.value.trim().replace(",", ".");
+                            const parsed = Number(raw);
+
+                            if (!Number.isFinite(parsed) || parsed < 0) {
+                              setServiceHoursDrafts((prev) => ({
+                                ...prev,
+                                [s.id]: String(Number(s.hours ?? 0).toFixed(1)).replace(".0", ""),
+                              }));
+                              return;
+                            }
+
+                            const normalized = Math.round(parsed * 2) / 2;
+
+                            setServiceHoursDrafts((prev) => ({
+                              ...prev,
+                              [s.id]: String(normalized).replace(".0", ""),
+                            }));
+                          }}
+                          className="workorder-detail-small-input"
+                          disabled={rowUpdatingId === s.id}
+                        />
                       </td>
-                      <td style={td}>
+                      <td>{s.notes || "-"}</td>
+                      <td>
+                        <div className="workorder-detail-price-box">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={currentPriceText}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d,]/g, "");
+                              const normalized = raw.includes(",")
+                                ? `${raw.split(",")[0]},${raw.split(",").slice(1).join("")}`
+                                : raw;
+
+                              setServicePriceDrafts((prev) => ({
+                                ...prev,
+                                [s.id]: normalized,
+                              }));
+                            }}
+                            onBlur={() => {
+                              const raw = (servicePriceDrafts[s.id] ?? "").trim();
+
+                              if (raw === "") {
+                                setServicePriceDrafts((prev) => ({
+                                  ...prev,
+                                  [s.id]: "",
+                                }));
+                                return;
+                              }
+
+                              const parsed = Number(raw.replace(",", "."));
+
+                              if (!Number.isFinite(parsed) || parsed < 0) {
+                                setToast({
+                                  type: "error",
+                                  message: "Inserisci un prezzo valido.",
+                                });
+
+                                setServicePriceDrafts((prev) => ({
+                                  ...prev,
+                                  [s.id]: String(
+                                    Number(
+                                      s.custom_price ?? Number(s.hours || 0) * hourlyRate
+                                    ).toFixed(2)
+                                  ).replace(".", ","),
+                                }));
+                                return;
+                              }
+
+                              setServicePriceDrafts((prev) => ({
+                                ...prev,
+                                [s.id]: String(parsed.toFixed(2)).replace(".", ","),
+                              }));
+                            }}
+                            className={`workorder-detail-small-input-wide ${s.custom_price === null || s.custom_price === undefined
+                                ? "workorder-detail-small-input-wide--muted"
+                                : "workorder-detail-small-input-wide--active"
+                              }`}
+                            disabled={rowUpdatingId === s.id}
+                          />
+                        </div>
+                      </td>
+                      <td>
+                        <label className="workorder-detail-checkbox-wrap">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(s.billable ?? true)}
+                            onChange={() =>
+                              toggleServiceBillable(s.id, Boolean(s.billable ?? true))
+                            }
+                            disabled={rowUpdatingId === s.id}
+                          />
+                          <span>{Boolean(s.billable ?? true) ? "Fatturabile" : "Interno"}</span>
+                        </label>
+                      </td>
+                      <td>
                         <button
-                          style={dangerGhostBtn}
+                          className="workorder-detail-danger-btn"
                           onClick={() => deleteService(s.id)}
+                          disabled={rowUpdatingId === s.id}
                         >
-                          Elimina
+                          {rowUpdatingId === s.id ? "..." : "Elimina"}
                         </button>
                       </td>
                     </tr>
@@ -588,64 +1539,91 @@ export default function WorkOrderDetail() {
         <ModalShell
           title="Aggiungi ricambio"
           subtitle="Cerca un prodotto, selezionalo e definisci quantità e prezzo."
-          icon="📦"
+          icon={<Wrench size={22} strokeWidth={2.2} />}
         >
           <input
             placeholder="Cerca prodotto o EAN..."
             value={partSearch}
             onChange={(e) => setPartSearch(e.target.value)}
-            style={modalInput}
+            className="apple-input workorder-modal-input"
           />
 
-          <div style={resultsWrap}>
+          <div className="workorder-modal-results">
             {partSearch.trim().length < 2 ? (
-              <div style={emptyBoxSmall}>Scrivi almeno 2 caratteri per cercare.</div>
+              <div className="workorder-detail-empty">
+                Scrivi almeno 2 caratteri per cercare.
+              </div>
             ) : filteredProducts.length === 0 ? (
-              <div style={emptyBoxSmall}>Nessun prodotto trovato.</div>
+              <div className="workorder-detail-empty">Nessun prodotto trovato.</div>
             ) : (
-              filteredProducts.map((p) => (
-                <div key={p.id} style={productResultCard}>
-                  <div>
-                    <div style={cellTitle}>{p.title}</div>
-                    <div style={cellSub}>EAN {p.ean || "-"}</div>
-                    <div style={productPrice}>{p.price_b2c || 0} €</div>
-                  </div>
+              filteredProducts.map((p) => {
+                const isSelected = selectedProduct?.id === p.id;
+                const isOutOfStock = Number(p.warehouse_qty || 0) <= 0;
+                const isAlreadyInSheet = parts.some((part) => part.product_id === p.id);
 
-                  <button
-                    onClick={() => setSelectedProduct(p)}
-                    style={smallPrimaryBtn}
-                  >
-                    Seleziona
-                  </button>
-                </div>
-              ))
+                return (
+                  <div key={p.id} className="workorder-modal-product-card">
+                    <div>
+                      <div className="workorder-detail-cell-title">{p.title}</div>
+                      <div className="workorder-detail-cell-sub">EAN {p.ean || "-"}</div>
+                      <div className="workorder-modal-product-price">
+                        {formatCurrency(p.price_b2c)}
+                      </div>
+                      <div className="workorder-detail-cell-sub">
+                        Disponibili: {Number(p.warehouse_qty || 0)}
+                      </div>
+                    </div>
+
+                    {isAlreadyInSheet ? (
+                      <div className="workorder-modal-stock-badge">
+                        Già presente
+                      </div>
+                    ) : !isSelected ? (
+                      <button
+                        onClick={() => setSelectedProduct(p)}
+                        className="btn-secondary workorder-modal-select-btn"
+                      >
+                        Seleziona
+                      </button>
+                    ) : isOutOfStock ? (
+                      <div className="workorder-modal-stock-badge workorder-modal-stock-badge--out">
+                        Esaurito
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
             )}
           </div>
 
           {selectedProduct && (
-            <div style={selectedBox}>
-              <div style={selectedTitle}>{selectedProduct.title}</div>
+            <div className="workorder-modal-selected-box">
+              <div className="workorder-modal-selected-title">{selectedProduct.title}</div>
 
-              <div style={modalGrid}>
+              <div className="workorder-modal-grid">
                 <div>
-                  <label style={fieldLabel}>Quantità</label>
+                  <label className="workorder-modal-label">Quantità</label>
                   <input
                     type="number"
+                    min={1}
+                    step={1}
+                    inputMode="numeric"
                     value={partForm.quantity}
                     onChange={(e) =>
                       setPartForm({
                         ...partForm,
-                        quantity: Number(e.target.value),
+                        quantity: Math.max(1, Number(e.target.value) || 1),
                       })
                     }
-                    style={modalInput}
+                    className="apple-input workorder-modal-input"
                   />
                 </div>
 
                 <div>
-                  <label style={fieldLabel}>Prezzo custom</label>
+                  <label className="workorder-modal-label">Prezzo custom</label>
                   <input
                     type="number"
+                    step="0.01"
                     value={partForm.custom_price}
                     placeholder={String(selectedProduct.price_b2c || "")}
                     onChange={(e) =>
@@ -654,19 +1632,20 @@ export default function WorkOrderDetail() {
                         custom_price: e.target.value,
                       })
                     }
-                    style={modalInput}
+                    className="apple-input workorder-modal-input"
                   />
                 </div>
               </div>
 
-              <div style={modalFooter}>
+              <div className="workorder-modal-footer">
                 <button
                   onClick={() => {
                     setShowPartsModal(false);
                     setSelectedProduct(null);
                     setPartSearch("");
+                    setPartForm({ quantity: 1, custom_price: "" });
                   }}
-                  style={secondaryBtn}
+                  className="btn-secondary"
                   disabled={savingPart}
                 >
                   Annulla
@@ -674,7 +1653,7 @@ export default function WorkOrderDetail() {
 
                 <button
                   onClick={savePart}
-                  style={primaryBtn}
+                  className="btn-primary workorder-modal-primary-btn"
                   disabled={savingPart}
                 >
                   {savingPart ? "Salvataggio..." : "Aggiungi ricambio"}
@@ -684,10 +1663,15 @@ export default function WorkOrderDetail() {
           )}
 
           {!selectedProduct && (
-            <div style={modalFooter}>
+            <div className="workorder-modal-footer">
               <button
-                onClick={() => setShowPartsModal(false)}
-                style={secondaryBtn}
+                onClick={() => {
+                  setShowPartsModal(false);
+                  setSelectedProduct(null);
+                  setPartSearch("");
+                  setPartForm({ quantity: 1, custom_price: "" });
+                }}
+                className="btn-primary workorder-modal-primary-btn"
               >
                 Chiudi
               </button>
@@ -700,35 +1684,35 @@ export default function WorkOrderDetail() {
         <ModalShell
           title="Nuovo intervento"
           subtitle="Inserisci i dati dell’intervento di officina."
-          icon="🔧"
+          icon={<ClipboardPenLine size={22} strokeWidth={2.2} />}
         >
-          <div style={modalGridSingle}>
+          <div className="workorder-modal-grid-single">
             <div>
-              <label style={fieldLabel}>Data</label>
+              <label className="workorder-modal-label">Data</label>
               <input
                 type="date"
                 value={newService.service_date}
                 onChange={(e) =>
                   setNewService({ ...newService, service_date: e.target.value })
                 }
-                style={modalInput}
+                className="apple-input workorder-modal-input"
               />
             </div>
 
             <div>
-              <label style={fieldLabel}>Intervento</label>
+              <label className="workorder-modal-label">Intervento</label>
               <input
                 value={newService.title}
                 onChange={(e) =>
                   setNewService({ ...newService, title: e.target.value })
                 }
                 placeholder="es. Regolazione cambio"
-                style={modalInput}
+                className="apple-input workorder-modal-input"
               />
             </div>
 
             <div>
-              <label style={fieldLabel}>Ore</label>
+              <label className="workorder-modal-label">Ore</label>
               <input
                 type="number"
                 step="0.25"
@@ -739,42 +1723,44 @@ export default function WorkOrderDetail() {
                     hours: Number(e.target.value),
                   })
                 }
-                style={modalInput}
+                className="apple-input workorder-modal-input"
               />
             </div>
 
             <div>
-              <label style={fieldLabel}>Prezzo manuale</label>
+              <label className="workorder-modal-label">Prezzo manuale</label>
               <input
-                type="number"
-                value={newService.custom_price}
+                type="text"
+                inputMode="decimal"
+                value={newService.custom_price.replace(".", ",")}
                 onChange={(e) =>
                   setNewService({
                     ...newService,
-                    custom_price: e.target.value,
+                    custom_price: e.target.value.replace(",", "."),
                   })
                 }
-                style={modalInput}
+                placeholder="0,00 €"
+                className="apple-input workorder-modal-input workorder-modal-price-input"
               />
             </div>
 
             <div>
-              <label style={fieldLabel}>Note</label>
+              <label className="workorder-modal-label">Note</label>
               <textarea
                 rows={4}
                 value={newService.notes}
                 onChange={(e) =>
                   setNewService({ ...newService, notes: e.target.value })
                 }
-                style={modalTextarea}
+                className="apple-textarea workorder-modal-textarea"
               />
             </div>
           </div>
 
-          <div style={modalFooter}>
+          <div className="workorder-modal-footer">
             <button
               onClick={() => setShowServiceModal(false)}
-              style={secondaryBtn}
+              className="btn-primary workorder-modal-cancel-btn"
               disabled={savingService}
             >
               Annulla
@@ -782,7 +1768,7 @@ export default function WorkOrderDetail() {
 
             <button
               onClick={saveService}
-              style={primaryBtn}
+              className="btn-primary workorder-modal-primary-btn"
               disabled={savingService}
             >
               {savingService ? "Salvataggio..." : "Salva intervento"}
@@ -796,9 +1782,9 @@ export default function WorkOrderDetail() {
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div style={infoRow}>
-      <span style={infoLabel}>{label}</span>
-      <span style={infoValue}>{value}</span>
+    <div className="workorder-detail-info-row">
+      <span className="workorder-detail-info-label">{label}</span>
+      <span className="workorder-detail-info-value">{value}</span>
     </div>
   );
 }
@@ -811,480 +1797,24 @@ function ModalShell({
 }: {
   title: string;
   subtitle?: string;
-  icon?: string;
+  icon?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <div style={overlay}>
-      <div style={modalCard}>
-        <div style={modalHeader}>
-          <div style={modalIcon}>{icon || "✨"}</div>
+    <div className="workorder-modal-overlay">
+      <div className="workorder-modal-card">
+        <div className="workorder-modal-header">
+          <div className="workorder-modal-icon">{icon || "✨"}</div>
           <div>
-            <h2 style={modalTitle}>{title}</h2>
-            {subtitle ? <p style={modalSubtitle}>{subtitle}</p> : null}
+            <h2 className="workorder-modal-title">{title}</h2>
+            {subtitle ? (
+              <p className="workorder-modal-subtitle">{subtitle}</p>
+            ) : null}
           </div>
         </div>
 
-        <div style={modalContent}>{children}</div>
+        <div className="workorder-modal-content">{children}</div>
       </div>
     </div>
   );
 }
-
-/* STILI */
-
-const page: React.CSSProperties = {
-  maxWidth: 1200,
-  margin: "0 auto",
-  padding: 28,
-  background: "#f8fafc",
-  minHeight: "100vh",
-};
-
-const header: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 16,
-  flexWrap: "wrap",
-  marginBottom: 24,
-};
-
-const breadcrumb: React.CSSProperties = {
-  fontSize: 13,
-  color: "#64748b",
-  marginBottom: 8,
-};
-
-const title: React.CSSProperties = {
-  margin: 0,
-  fontSize: 34,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const subtitle: React.CSSProperties = {
-  marginTop: 8,
-  color: "#64748b",
-  fontSize: 15,
-};
-
-const printBtn: React.CSSProperties = {
-  background: "linear-gradient(135deg,#16a34a,#15803d)",
-  color: "white",
-  border: "none",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 700,
-  boxShadow: "0 12px 24px rgba(22,163,74,0.2)",
-};
-
-const infoGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "2fr 1fr",
-  gap: 18,
-  marginBottom: 24,
-};
-
-const infoCardWide: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #e2e8f0",
-  borderRadius: 22,
-  padding: 22,
-  boxShadow: "0 8px 24px rgba(15,23,42,0.04)",
-};
-
-const summaryCard: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #e2e8f0",
-  borderRadius: 22,
-  padding: 22,
-  boxShadow: "0 8px 24px rgba(15,23,42,0.04)",
-};
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 800,
-  color: "#0f172a",
-  marginBottom: 16,
-};
-
-const infoRows: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-};
-
-const infoRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  borderBottom: "1px solid #f1f5f9",
-  paddingBottom: 10,
-};
-
-const infoLabel: React.CSSProperties = {
-  color: "#64748b",
-  fontSize: 14,
-};
-
-const infoValue: React.CSSProperties = {
-  color: "#0f172a",
-  fontSize: 14,
-  fontWeight: 600,
-  textAlign: "right",
-};
-
-const moneyRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  marginBottom: 12,
-  color: "#0f172a",
-};
-
-const divider: React.CSSProperties = {
-  height: 1,
-  background: "#e5e7eb",
-  margin: "14px 0",
-};
-
-const totalRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  fontSize: 20,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const sectionCard: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #e2e8f0",
-  borderRadius: 22,
-  padding: 22,
-  boxShadow: "0 8px 24px rgba(15,23,42,0.04)",
-  marginBottom: 22,
-};
-
-const sectionHeader: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 14,
-  flexWrap: "wrap",
-  marginBottom: 18,
-};
-
-const sectionHeading: React.CSSProperties = {
-  margin: 0,
-  fontSize: 24,
-  color: "#0f172a",
-};
-
-const sectionText: React.CSSProperties = {
-  marginTop: 6,
-  color: "#64748b",
-  fontSize: 14,
-};
-
-const primaryBtn: React.CSSProperties = {
-  background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
-  color: "white",
-  border: "none",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const secondaryBtn: React.CSSProperties = {
-  background: "#eef2f7",
-  color: "#0f172a",
-  border: "1px solid #dbe2ea",
-  padding: "12px 18px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const smallPrimaryBtn: React.CSSProperties = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding: "9px 14px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const dangerGhostBtn: React.CSSProperties = {
-  background: "#fff1f2",
-  color: "#be123c",
-  border: "1px solid #fecdd3",
-  padding: "8px 12px",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const tableWrap: React.CSSProperties = {
-  overflowX: "auto",
-  border: "1px solid #edf2f7",
-  borderRadius: 16,
-};
-
-const table: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  minWidth: 820,
-};
-
-const row: React.CSSProperties = {
-  borderTop: "1px solid #eef2f7",
-};
-
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: 14,
-  background: "#f8fafc",
-  color: "#64748b",
-  fontSize: 12,
-  textTransform: "uppercase",
-  letterSpacing: 0.3,
-};
-
-const td: React.CSSProperties = {
-  padding: 14,
-  color: "#0f172a",
-  verticalAlign: "top",
-};
-
-const cellTitle: React.CSSProperties = {
-  fontWeight: 700,
-  color: "#0f172a",
-};
-
-const cellSub: React.CSSProperties = {
-  color: "#64748b",
-  fontSize: 12,
-  marginTop: 4,
-};
-
-const smallInput: React.CSSProperties = {
-  width: 86,
-  padding: "10px 12px",
-  border: "1px solid #dbe2ea",
-  borderRadius: 10,
-  fontSize: 14,
-};
-
-const priceBox: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-};
-
-const oldPrice: React.CSSProperties = {
-  fontSize: 12,
-  color: "#94a3b8",
-  textDecoration: "line-through",
-};
-
-const checkboxWrap: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  fontSize: 13,
-  color: "#334155",
-};
-
-const emptyBox: React.CSSProperties = {
-  background: "#f8fafc",
-  border: "1px dashed #cbd5e1",
-  borderRadius: 16,
-  padding: 24,
-  textAlign: "center",
-  color: "#64748b",
-};
-
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(15,23,42,0.55)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 20,
-  zIndex: 1000,
-  backdropFilter: "blur(4px)",
-};
-
-const modalCard: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 620,
-  maxHeight: "85vh",
-  overflowY: "auto",
-  background: "#fff",
-  borderRadius: 24,
-  padding: 26,
-  boxShadow: "0 30px 80px rgba(15,23,42,0.28)",
-  border: "1px solid #e2e8f0",
-};
-
-const modalHeader: React.CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 14,
-  marginBottom: 20,
-};
-
-const modalIcon: React.CSSProperties = {
-  width: 52,
-  height: 52,
-  borderRadius: 16,
-  background: "#dbeafe",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 24,
-  flexShrink: 0,
-};
-
-const modalTitle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 24,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const modalSubtitle: React.CSSProperties = {
-  margin: "8px 0 0 0",
-  color: "#64748b",
-  fontSize: 14,
-  lineHeight: 1.5,
-};
-
-const modalContent: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 16,
-};
-
-const modalInput: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid #dbe2ea",
-  fontSize: 14,
-  outline: "none",
-};
-
-const modalTextarea: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid #dbe2ea",
-  fontSize: 14,
-  outline: "none",
-  resize: "vertical",
-};
-
-const fieldLabel: React.CSSProperties = {
-  display: "block",
-  marginBottom: 8,
-  fontSize: 13,
-  color: "#475569",
-  fontWeight: 700,
-};
-
-const resultsWrap: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-};
-
-const productResultCard: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 14,
-  padding: 14,
-  border: "1px solid #e5e7eb",
-  borderRadius: 14,
-  background: "#fff",
-};
-
-const productPrice: React.CSSProperties = {
-  marginTop: 6,
-  fontWeight: 700,
-  color: "#0f172a",
-};
-
-const selectedBox: React.CSSProperties = {
-  borderTop: "1px solid #eef2f7",
-  paddingTop: 16,
-};
-
-const selectedTitle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 800,
-  color: "#0f172a",
-  marginBottom: 14,
-};
-
-const modalGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 14,
-};
-
-const modalGridSingle: React.CSSProperties = {
-  display: "grid",
-  gap: 14,
-};
-
-const modalFooter: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 12,
-  marginTop: 8,
-  flexWrap: "wrap",
-};
-
-const emptyBoxSmall: React.CSSProperties = {
-  background: "#f8fafc",
-  border: "1px dashed #cbd5e1",
-  borderRadius: 14,
-  padding: 18,
-  textAlign: "center",
-  color: "#64748b",
-};
-
-const toastStyle: React.CSSProperties = {
-  position: "fixed",
-  top: 24,
-  right: 24,
-  zIndex: 1200,
-  padding: "14px 18px",
-  borderRadius: 14,
-  fontWeight: 700,
-  boxShadow: "0 12px 30px rgba(15,23,42,0.16)",
-};
-
-const toastSuccess: React.CSSProperties = {
-  background: "#ecfdf5",
-  color: "#065f46",
-  border: "1px solid #a7f3d0",
-};
-
-const toastError: React.CSSProperties = {
-  background: "#fff1f2",
-  color: "#9f1239",
-  border: "1px solid #fecdd3",
-};
-
-const toastInfo: React.CSSProperties = {
-  background: "#eff6ff",
-  color: "#1d4ed8",
-  border: "1px solid #bfdbfe",
-};

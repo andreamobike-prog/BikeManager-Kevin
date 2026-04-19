@@ -3,21 +3,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import * as XLSX from "xlsx";
 import { Upload, Plus } from "lucide-react";
 
-type CustomerType = "private" | "company";
-type EventFormat = "biga_race" | "biga_adventure" | "biga_love";
+type SupplierType = "private" | "company";
 type ToastType = "success" | "error" | "info";
 
-type Customer = {
+type Supplier = {
   id: string;
   name: string | null;
   phone: string | null;
   email: string | null;
   notes?: string | null;
   created_at?: string | null;
-  customer_type?: CustomerType | null;
+  supplier_type?: SupplierType | null;
   vat_number?: string | null;
   tax_code?: string | null;
   address?: string | null;
@@ -30,16 +28,13 @@ type Customer = {
   pec?: string | null;
   iban?: string | null;
   sdi_code?: string | null;
-  biga_race?: boolean | null;
-  biga_adventure?: boolean | null;
-  biga_love?: boolean | null;
 };
 
-type CustomerForm = {
+type SupplierForm = {
   name: string;
   phone: string;
   email: string;
-  customer_type: CustomerType;
+  supplier_type: SupplierType;
   vat_number: string;
   tax_code: string;
   address: string;
@@ -53,16 +48,13 @@ type CustomerForm = {
   iban: string;
   sdi_code: string;
   notes: string;
-  biga_race: boolean;
-  biga_adventure: boolean;
-  biga_love: boolean;
 };
 
-const initialForm: CustomerForm = {
+const initialForm: SupplierForm = {
   name: "",
   phone: "",
   email: "",
-  customer_type: "private",
+  supplier_type: "company",
   vat_number: "",
   tax_code: "",
   address: "",
@@ -76,26 +68,22 @@ const initialForm: CustomerForm = {
   iban: "",
   sdi_code: "",
   notes: "",
-  biga_race: false,
-  biga_adventure: false,
-  biga_love: false,
 };
 
-export default function CustomersPage() {
+export default function SuppliersPage() {
   const router = useRouter();
 
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | CustomerType>("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | SupplierType>("all");
   const [cityFilter, setCityFilter] = useState("");
   const [showModal, setShowModal] = useState(false);
 
-  const [form, setForm] = useState<CustomerForm>(initialForm);
+  const [form, setForm] = useState<SupplierForm>(initialForm);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
   const [toast, setToast] = useState<{
     type: ToastType;
@@ -103,7 +91,7 @@ export default function CustomersPage() {
   } | null>(null);
 
   useEffect(() => {
-    loadCustomers();
+    loadSuppliers();
   }, []);
 
   useEffect(() => {
@@ -112,25 +100,25 @@ export default function CustomersPage() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  async function loadCustomers() {
+  async function loadSuppliers() {
     setLoading(true);
 
     const { data, error } = await supabase
-      .from("customers")
+      .from("suppliers")
       .select("*")
       .order("name", { ascending: true });
 
     if (error) {
-      console.error("Errore caricamento clienti:", error);
+      console.error("Errore caricamento fornitori:", error);
       setToast({
         type: "error",
-        message: `Errore nel caricamento clienti: ${error.message}`,
+        message: `Errore nel caricamento fornitori: ${error.message}`,
       });
       setLoading(false);
       return;
     }
 
-    setCustomers((data as Customer[]) || []);
+    setSuppliers((data as Supplier[]) || []);
     setLoading(false);
   }
 
@@ -154,60 +142,60 @@ export default function CustomersPage() {
     return value.trim().toLowerCase();
   }
 
-  async function checkDuplicateCustomer() {
+  async function checkDuplicateSupplier() {
     const email = normalizeEmail(form.email);
     const taxCode = normalizeTaxCode(form.tax_code);
     const vatNumber = normalizeVat(form.vat_number);
 
     if (email) {
       const { data, error } = await supabase
-        .from("customers")
+        .from("suppliers")
         .select("id,name")
         .eq("email", email)
         .limit(1);
 
       if (!error && data && data.length > 0) {
-        return `Esiste già un cliente con questa email: ${data[0].name || "cliente esistente"}`;
+        return `Esiste già un fornitore con questa email: ${data[0].name || "fornitore esistente"}`;
       }
     }
 
     if (taxCode) {
       const { data, error } = await supabase
-        .from("customers")
+        .from("suppliers")
         .select("id,name")
         .eq("tax_code", taxCode)
         .limit(1);
 
       if (!error && data && data.length > 0) {
-        return `Esiste già un cliente con questo codice fiscale: ${data[0].name || "cliente esistente"}`;
+        return `Esiste già un fornitore con questo codice fiscale: ${data[0].name || "fornitore esistente"}`;
       }
     }
 
     if (vatNumber) {
       const { data, error } = await supabase
-        .from("customers")
+        .from("suppliers")
         .select("id,name")
         .eq("vat_number", vatNumber)
         .limit(1);
 
       if (!error && data && data.length > 0) {
-        return `Esiste già un cliente con questa partita IVA: ${data[0].name || "cliente esistente"}`;
+        return `Esiste già un fornitore con questa partita IVA: ${data[0].name || "fornitore esistente"}`;
       }
     }
 
     return null;
   }
 
-  async function createCustomer() {
+  async function createSupplier() {
     if (!form.name.trim()) {
       setToast({
         type: "error",
-        message: "Inserisci il nome del cliente.",
+        message: "Inserisci il nome del fornitore.",
       });
       return;
     }
 
-    const duplicateMessage = await checkDuplicateCustomer();
+    const duplicateMessage = await checkDuplicateSupplier();
 
     if (duplicateMessage) {
       setToast({
@@ -223,7 +211,7 @@ export default function CustomersPage() {
       name: form.name.trim(),
       phone: form.phone.trim() || null,
       email: normalizeEmail(form.email) || null,
-      customer_type: form.customer_type,
+      supplier_type: form.supplier_type,
       vat_number: normalizeVat(form.vat_number) || null,
       tax_code: normalizeTaxCode(form.tax_code) || null,
       address: form.address.trim() || null,
@@ -237,47 +225,51 @@ export default function CustomersPage() {
       iban: form.iban.trim().toUpperCase() || null,
       sdi_code: form.sdi_code.trim().toUpperCase() || null,
       notes: form.notes.trim() || null,
-      biga_race: form.biga_race,
-      biga_adventure: form.biga_adventure,
-      biga_love: form.biga_love,
     };
 
-    const { error } = await supabase.from("customers").insert(payload);
+    const { error } = await supabase.from("suppliers").insert(payload);
 
     if (error) {
-      console.error("Errore inserimento cliente:", error);
-      setToast({
-        type: "error",
-        message: `Errore nel salvataggio: ${error.message}`,
-      });
-      setSaving(false);
-      return;
-    }
+  console.error("Errore inserimento fornitore:", {
+    message: error?.message,
+    details: error?.details,
+    hint: error?.hint,
+    code: error?.code,
+    error,
+  });
+
+  setToast({
+    type: "error",
+    message: `Errore nel salvataggio: ${error.message}`,
+  });
+  setSaving(false);
+  return;
+}
 
     setToast({
       type: "success",
-      message: "Cliente creato correttamente.",
+      message: "Fornitore creato correttamente.",
     });
 
     resetForm();
     setShowModal(false);
-    await loadCustomers();
+    await loadSuppliers();
     setSaving(false);
   }
 
-  async function deleteCustomer(id: string, name: string | null) {
+  async function deleteSupplier(id: string, name: string | null) {
     const ok = window.confirm(
-      `Vuoi davvero eliminare il cliente "${name || "senza nome"}"?`
+      `Vuoi davvero eliminare il fornitore "${name || "senza nome"}"?`
     );
 
     if (!ok) return;
 
     setDeletingId(id);
 
-    const { error } = await supabase.from("customers").delete().eq("id", id);
+    const { error } = await supabase.from("suppliers").delete().eq("id", id);
 
     if (error) {
-      console.error("Errore eliminazione cliente:", error);
+      console.error("Errore eliminazione fornitore:", error);
       setToast({
         type: "error",
         message: `Errore durante l'eliminazione: ${error.message}`,
@@ -288,71 +280,27 @@ export default function CustomersPage() {
 
     setToast({
       type: "success",
-      message: "Cliente eliminato correttamente.",
+      message: "Fornitore eliminato correttamente.",
     });
 
-    await loadCustomers();
+    await loadSuppliers();
     setDeletingId(null);
   }
 
-  async function toggleEventFlag(
-    customerId: string,
-    field: EventFormat,
-    currentValue: boolean | null | undefined
-  ) {
-    const key = `${customerId}-${field}`;
-    setTogglingKey(key);
-
-    const nextValue = !Boolean(currentValue);
-
-    const { error } = await supabase
-      .from("customers")
-      .update({ [field]: nextValue })
-      .eq("id", customerId);
-
-    if (error) {
-      console.error(`Errore aggiornamento ${field}:`, error);
-      setToast({
-        type: "error",
-        message: `Errore aggiornamento format evento: ${error.message}`,
-      });
-      setTogglingKey(null);
-      return;
-    }
-
-    setCustomers((prev) =>
-      prev.map((customer) =>
-        customer.id === customerId
-          ? {
-            ...customer,
-            [field]: nextValue,
-          }
-          : customer
-      )
-    );
-
-    setToast({
-      type: "success",
-      message: "Format evento aggiornato.",
-    });
-
-    setTogglingKey(null);
-  }
-
-  function getCustomerTypeLabel(type: CustomerType | null | undefined) {
+  function getSupplierTypeLabel(type: SupplierType | null | undefined) {
     return type === "company" ? "Azienda" : "Privato";
   }
 
-  function getAddressLine(customer: Customer) {
-    const first = [customer.address || "", customer.address_notes || ""]
+  function getAddressLine(supplier: Supplier) {
+    const first = [supplier.address || "", supplier.address_notes || ""]
       .filter(Boolean)
       .join(" - ");
 
     const second = [
-      customer.zip || "",
-      customer.city || "",
-      customer.province ? `(${customer.province})` : "",
-      customer.country || "",
+      supplier.zip || "",
+      supplier.city || "",
+      supplier.province ? `(${supplier.province})` : "",
+      supplier.country || "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -360,79 +308,34 @@ export default function CustomersPage() {
     return [first, second].filter(Boolean).join(", ");
   }
 
-  function exportEventXlsx(eventField: EventFormat) {
-    const labels: Record<EventFormat, string> = {
-      biga_race: "BigaRace",
-      biga_adventure: "BigaAdventure",
-      biga_love: "BigaLove",
-    };
-
-    const selected = customers.filter((customer) => Boolean(customer[eventField]));
-
-    if (selected.length === 0) {
-      setToast({
-        type: "info",
-        message: `Nessun cliente selezionato per ${labels[eventField]}.`,
-      });
-      return;
-    }
-
-    const rows = selected.map((customer) => ({
-      nome: customer.name || "",
-      tipo: getCustomerTypeLabel(customer.customer_type),
-      referente: customer.contact_name || "",
-      telefono: customer.phone || "",
-      email: customer.email || "",
-      pec: customer.pec || "",
-      citta: customer.city || "",
-      provincia: customer.province || "",
-      indirizzo: getAddressLine(customer),
-      partita_iva: customer.vat_number || "",
-      codice_fiscale: customer.tax_code || "",
-      biga_race: customer.biga_race ? "SI" : "NO",
-      biga_adventure: customer.biga_adventure ? "SI" : "NO",
-      biga_love: customer.biga_love ? "SI" : "NO",
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, labels[eventField]);
-    XLSX.writeFile(workbook, `${labels[eventField]}_contatti.xlsx`);
-
-    setToast({
-      type: "success",
-      message: `File ${labels[eventField]} esportato correttamente.`,
-    });
-  }
-
   const uniqueCities = useMemo(() => {
     return Array.from(
-      new Set(customers.map((c) => (c.city || "").trim()).filter(Boolean))
+      new Set(suppliers.map((s) => (s.city || "").trim()).filter(Boolean))
     ).sort((a, b) => a.localeCompare(b));
-  }, [customers]);
+  }, [suppliers]);
 
   const filtered = useMemo(() => {
-    let result = [...customers];
+    let result = [...suppliers];
     const q = search.trim().toLowerCase();
 
     if (q) {
-      result = result.filter((c) => {
+      result = result.filter((s) => {
         const text = [
-          c.name || "",
-          c.phone || "",
-          c.email || "",
-          c.customer_type || "",
-          c.vat_number || "",
-          c.tax_code || "",
-          c.city || "",
-          c.pec || "",
-          c.address || "",
-          c.zip || "",
-          c.province || "",
-          c.contact_name || "",
-          c.sdi_code || "",
-          c.iban || "",
-          c.notes || "",
+          s.name || "",
+          s.phone || "",
+          s.email || "",
+          s.supplier_type || "",
+          s.vat_number || "",
+          s.tax_code || "",
+          s.city || "",
+          s.pec || "",
+          s.address || "",
+          s.zip || "",
+          s.province || "",
+          s.contact_name || "",
+          s.sdi_code || "",
+          s.iban || "",
+          s.notes || "",
         ]
           .join(" ")
           .toLowerCase();
@@ -442,38 +345,36 @@ export default function CustomersPage() {
     }
 
     if (typeFilter !== "all") {
-      result = result.filter((c) => (c.customer_type || "private") === typeFilter);
+      result = result.filter((s) => (s.supplier_type || "private") === typeFilter);
     }
 
     if (cityFilter) {
-      result = result.filter((c) => (c.city || "") === cityFilter);
+      result = result.filter((s) => (s.city || "") === cityFilter);
     }
 
     return result;
-  }, [customers, search, typeFilter, cityFilter]);
+  }, [suppliers, search, typeFilter, cityFilter]);
 
   const stats = useMemo(() => {
     return {
-      total: customers.length,
-      privateCount: customers.filter((c) => (c.customer_type || "private") === "private").length,
-      companyCount: customers.filter((c) => c.customer_type === "company").length,
-      raceCount: customers.filter((c) => Boolean(c.biga_race)).length,
-      adventureCount: customers.filter((c) => Boolean(c.biga_adventure)).length,
-      loveCount: customers.filter((c) => Boolean(c.biga_love)).length,
+      total: suppliers.length,
+      privateCount: suppliers.filter((s) => (s.supplier_type || "company") === "private").length,
+      companyCount: suppliers.filter((s) => (s.supplier_type || "company") === "company").length,
     };
-  }, [customers]);
+  }, [suppliers]);
 
   return (
     <div className="app-page-shell">
       <div className="page-stack">
         {toast && (
           <div
-            className={`toast ${toast.type === "success"
-              ? "toastSuccess"
-              : toast.type === "error"
+            className={`toast ${
+              toast.type === "success"
+                ? "toastSuccess"
+                : toast.type === "error"
                 ? "toastError"
                 : "toastInfo"
-              }`}
+            }`}
           >
             {toast.message}
           </div>
@@ -482,32 +383,32 @@ export default function CustomersPage() {
         <div className="customers-hero">
           <div className="page-header">
             <div className="page-header__left">
-              <div className="apple-kicker">CRM clienti</div>
-              <h1 className="apple-page-title">Clienti</h1>
+              <div className="apple-kicker">Anagrafica fornitori</div>
+              <h1 className="apple-page-title">Fornitori</h1>
               <p className="apple-page-subtitle">
-                Gestisci anagrafiche, format evento, export contatti e ricerca avanzata in una sola vista.
+                Gestisci anagrafiche, dati fiscali, contatti e ricerca avanzata in una sola vista.
               </p>
             </div>
 
             <div className="page-header__right">
               <button
                 className="btn-secondary"
-                onClick={() => router.push("/customers/import")}
+                onClick={() => router.push("/suppliers/import")}
               >
                 <Upload size={16} strokeWidth={2} />
-                <span>Importa clienti</span>
+                <span>Importa fornitori</span>
               </button>
 
               <button className="btn-primary" onClick={() => setShowModal(true)}>
                 <Plus size={16} strokeWidth={2} />
-                <span>Nuovo cliente</span>
+                <span>Nuovo fornitore</span>
               </button>
             </div>
           </div>
         </div>
 
         <div className="dashboard-stats-grid customers-stats-grid">
-          <StatCard label="Clienti totali" value={stats.total} />
+          <StatCard label="Fornitori totali" value={stats.total} />
           <StatCard label="Privati" value={stats.privateCount} />
           <StatCard label="Aziende" value={stats.companyCount} />
         </div>
@@ -526,11 +427,11 @@ export default function CustomersPage() {
               </div>
 
               <div className="apple-field">
-                <label className="apple-label">Tipo cliente</label>
+                <label className="apple-label">Tipo fornitore</label>
                 <select
                   className="apple-select"
                   value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value as "all" | CustomerType)}
+                  onChange={(e) => setTypeFilter(e.target.value as "all" | SupplierType)}
                 >
                   <option value="all">Tutti</option>
                   <option value="private">Privati</option>
@@ -580,67 +481,65 @@ export default function CustomersPage() {
         </div>
 
         {loading ? (
-          <div className="apple-empty">Caricamento clienti...</div>
+          <div className="apple-empty">Caricamento fornitori...</div>
         ) : filtered.length === 0 ? (
           <div className="apple-empty">
             {search.trim() || typeFilter !== "all" || cityFilter
-              ? "Nessun cliente trovato con i filtri attuali."
-              : "Non ci sono ancora clienti registrati."}
+              ? "Nessun fornitore trovato con i filtri attuali."
+              : "Non ci sono ancora fornitori registrati."}
           </div>
         ) : (
           <div className="customer-grid-dark">
-            {filtered.map((c) => (
-              <div key={c.id} className="customer-card-dark">
+            {filtered.map((s) => (
+              <div key={s.id} className="customer-card-dark">
                 <div className="customer-card-dark__top">
                   <div className="customer-card-dark__avatar">
-                    {(c.name || "?").charAt(0).toUpperCase()}
+                    {(s.name || "?").charAt(0).toUpperCase()}
                   </div>
 
                   <div className="customer-card-dark__main">
                     <div className="customer-card-dark__title-row">
-                      <h3 className="customer-card-dark__title">{c.name || "-"}</h3>
+                      <h3 className="customer-card-dark__title">{s.name || "-"}</h3>
 
                       <span
                         className={
-                          c.customer_type === "company"
+                          s.supplier_type === "company"
                             ? "badge badge-purple"
                             : "badge badge-blue"
                         }
                       >
-                        {getCustomerTypeLabel(c.customer_type)}
+                        {getSupplierTypeLabel(s.supplier_type)}
                       </span>
                     </div>
 
-                    <div className="customer-card-dark__id">ID: {c.id.slice(0, 8)}</div>
+                    <div className="customer-card-dark__id">ID: {s.id.slice(0, 8)}</div>
                   </div>
                 </div>
 
-                <></>
-
                 <div className="customer-card-dark__info">
-                  <InfoRow label="Referente" value={c.contact_name || "-"} />
-                  <InfoRow label="Telefono" value={c.phone || "-"} />
-                  <InfoRow label="Email" value={c.email || "-"} />
-                  <InfoRow label="Città" value={c.city || "-"} />
-                  <InfoRow label="Indirizzo" value={getAddressLine(c) || "-"} />
-                  <InfoRow label="P.IVA" value={c.vat_number || "-"} />
-                  <InfoRow label="Codice fiscale" value={c.tax_code || "-"} />
+                  <InfoRow label="Referente" value={s.contact_name || "-"} />
+                  <InfoRow label="Telefono" value={s.phone || "-"} />
+                  <InfoRow label="Email" value={s.email || "-"} />
+                  <InfoRow label="Città" value={s.city || "-"} />
+                  <InfoRow label="Indirizzo" value={getAddressLine(s) || "-"} />
+                  <InfoRow label="P.IVA" value={s.vat_number || "-"} />
+                  <InfoRow label="Codice fiscale" value={s.tax_code || "-"} />
                 </div>
 
                 <div className="customer-card-dark__actions">
                   <button
                     className="btn-primary"
-                    onClick={() => router.push(`/customers/${c.id}`)}
+                    onClick={() => router.push(`/suppliers/${s.id}`)}
                   >
                     Apri scheda
                   </button>
 
                   <button
                     className="btn-secondary"
-                    onClick={() => deleteCustomer(c.id, c.name)}
-                    disabled={deletingId === c.id}
+                    onClick={() => deleteSupplier(s.id, s.name)}
+                    disabled={deletingId === s.id}
                   >
-                    {deletingId === c.id ? "Eliminazione..." : "Elimina"}
+                    {deletingId === s.id ? "Eliminazione..." : "Elimina"}
                   </button>
                 </div>
               </div>
@@ -654,9 +553,9 @@ export default function CustomersPage() {
               <div className="customers-modal__header">
                 <div>
                   <div className="apple-kicker customers-modal__kicker">Nuova anagrafica</div>
-                  <h2 className="customers-modal__title">Nuovo cliente</h2>
+                  <h2 className="customers-modal__title">Nuovo fornitore</h2>
                   <p className="customers-modal__subtitle">
-                    Crea una scheda cliente completa, assegna i format evento e prepara subito il contatto.
+                    Crea una scheda fornitore completa e prepara subito l'anagrafica amministrativa e di contatto.
                   </p>
                 </div>
 
@@ -676,23 +575,38 @@ export default function CustomersPage() {
                 <section className="apple-panel">
                   <div className="apple-kicker">Dati principali</div>
                   <div className="apple-page-subtitle customers-section-subtitle">
-                    Identità cliente e canali di contatto.
+                    Identità fornitore e canali di contatto.
                   </div>
 
                   <div className="apple-form-grid customers-form-section">
-                    <></>
+                    <div className="apple-field">
+                      <label className="apple-label">Tipo fornitore</label>
+                      <select
+                        className="apple-select"
+                        value={form.supplier_type}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            supplier_type: e.target.value as SupplierType,
+                          }))
+                        }
+                      >
+                        <option value="company">Azienda</option>
+                        <option value="private">Privato</option>
+                      </select>
+                    </div>
 
                     <div className="apple-field">
                       <label className="apple-label">
-                        {form.customer_type === "company"
+                        {form.supplier_type === "company"
                           ? "Denominazione *"
-                          : "Nome cliente *"}
+                          : "Nome fornitore *"}
                       </label>
                       <input
                         className="apple-input"
                         placeholder={
-                          form.customer_type === "company"
-                            ? "Es. Biga S.R.L."
+                          form.supplier_type === "company"
+                            ? "Es. Forniture Rossi S.R.L."
                             : "Es. Mario Rossi"
                         }
                         value={form.name}
@@ -736,7 +650,7 @@ export default function CustomersPage() {
                         <label className="apple-label">Email</label>
                         <input
                           className="apple-input"
-                          placeholder="cliente@email.com"
+                          placeholder="fornitore@email.com"
                           value={form.email}
                           onChange={(e) =>
                             setForm((prev) => ({ ...prev, email: e.target.value }))
@@ -748,7 +662,7 @@ export default function CustomersPage() {
                         <label className="apple-label">PEC</label>
                         <input
                           className="apple-input"
-                          placeholder="cliente@pec.it"
+                          placeholder="fornitore@pec.it"
                           value={form.pec}
                           onChange={(e) =>
                             setForm((prev) => ({ ...prev, pec: e.target.value }))
@@ -762,7 +676,7 @@ export default function CustomersPage() {
                 <section className="apple-panel">
                   <div className="apple-kicker">Dati fiscali</div>
                   <div className="apple-page-subtitle customers-section-subtitle">
-                    Informazioni amministrative e fatturazione.
+                    Informazioni amministrative e di fatturazione.
                   </div>
 
                   <div className="apple-form-grid customers-form-section">
@@ -915,7 +829,7 @@ export default function CustomersPage() {
                     <label className="apple-label">Note</label>
                     <textarea
                       className="apple-textarea"
-                      placeholder="Inserisci informazioni utili sul cliente..."
+                      placeholder="Inserisci informazioni utili sul fornitore..."
                       value={form.notes}
                       onChange={(e) =>
                         setForm((prev) => ({ ...prev, notes: e.target.value }))
@@ -937,8 +851,8 @@ export default function CustomersPage() {
                   Annulla
                 </button>
 
-                <button className="btn-primary" onClick={createCustomer} disabled={saving}>
-                  {saving ? "Salvataggio..." : "Salva cliente"}
+                <button className="btn-primary" onClick={createSupplier} disabled={saving}>
+                  {saving ? "Salvataggio..." : "Salva fornitore"}
                 </button>
               </div>
             </div>
@@ -970,60 +884,5 @@ function InfoRow({
       <span className="customer-card-dark__info-label">{label}</span>
       <span className="customer-card-dark__info-value">{value}</span>
     </div>
-  );
-}
-
-function EventToggle({
-  label,
-  active,
-  loading,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  loading: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={loading}
-      className={`event-chip-dark ${active ? "active" : ""}`}
-      style={{
-        opacity: loading ? 0.7 : 1,
-        cursor: loading ? "not-allowed" : "pointer",
-      }}
-    >
-      {loading ? "..." : active ? `✓ ${label}` : label}
-    </button>
-  );
-}
-
-function EventCard({
-  title,
-  subtitle,
-  active,
-  tone,
-  onClick,
-}: {
-  title: string;
-  subtitle: string;
-  active: boolean;
-  tone: "blue" | "orange" | "red";
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`customer-event-card is-${tone} ${active ? "active" : ""}`}
-    >
-      <div className="customer-event-card__title">{title}</div>
-      <div className="customer-event-card__subtitle">{subtitle}</div>
-      <div className={active ? "badge badge-green" : "badge badge-gray"}>
-        {active ? "✓ Attivo" : "Seleziona"}
-      </div>
-    </button>
   );
 }

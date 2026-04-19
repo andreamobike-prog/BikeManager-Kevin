@@ -9,18 +9,30 @@ export default function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isLoginPage = pathname === "/login";
+  const hideSidebar = pathname === "/login";
 
-  if (isLoginPage) {
+  if (hideSidebar) {
     return <>{children}</>;
   }
 
   return (
-    <div className="app-shell">
+    <div style={shell}>
       <AppSidebar />
-      <main className="content-area">
-        <div className="content-card">{children}</div>
+      <main style={main}>
+        {children}
       </main>
     </div>
   );
 }
+
+const shell: React.CSSProperties = {
+  display: "flex",
+  minHeight: "100vh",
+  background:
+    "radial-gradient(circle at top left, #eef4ff 0%, #f8fafc 38%, #f3f6fb 100%)",
+};
+
+const main: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+};

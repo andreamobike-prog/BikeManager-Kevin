@@ -12,42 +12,85 @@ export default function AuthGuard({
   const router = useRouter();
   const pathname = usePathname();
 
-  const [checking, setChecking] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [allowed, setAllowed] = useState(false);
 
   useEffect(() => {
-    checkAuth();
+    let mounted = true;
+
+    async function runCheck() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      const isLoginPage = pathname === "/login";
+
+      if (session) {
+        if (isLoginPage) {
+          router.replace("/");
+          return;
+        }
+
+        setAllowed(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!session) {
+        if (isLoginPage) {
+          setAllowed(true);
+          setLoading(false);
+          return;
+        }
+
+        router.replace("/login");
+        return;
+      }
+    }
+
+    runCheck();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      checkAuth();
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const isLoginPage = pathname === "/login";
+
+      if (session) {
+        if (isLoginPage) {
+          router.replace("/");
+          return;
+        }
+
+        setAllowed(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!session) {
+        if (isLoginPage) {
+          setAllowed(true);
+          setLoading(false);
+          return;
+        }
+
+        router.replace("/login");
+      }
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [pathname, router]);
 
-  async function checkAuth() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    const isLoginPage = pathname === "/login";
-
-    if (!session && !isLoginPage) {
-      router.replace("/login");
-      return;
-    }
-
-    if (session && isLoginPage) {
-      router.replace("/");
-      return;
-    }
-
-    setChecking(false);
+  if (loading) {
+    return <div style={{ padding: 40 }}>Verifica accesso...</div>;
   }
 
-  if (checking) {
-    return <div style={{ padding: 40 }}>Verifica accesso...</div>;
+  if (!allowed) {
+    return null;
   }
 
   return <>{children}</>;
