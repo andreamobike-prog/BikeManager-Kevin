@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import ScanProductButton from "@/components/ScanProductButton";
 import { Printer, Wrench, ClipboardPenLine } from "lucide-react";
 
 type WorkOrder = {
@@ -202,6 +203,64 @@ export default function WorkOrderDetailPage() {
         );
       })
       : [];
+
+  function handlePartProductScan(value: string) {
+    const code = value.trim();
+    if (!code) return;
+
+    setPartSearch(code);
+
+    const normalized = code.toLowerCase();
+    const exactMatches = products.filter((p) => {
+      return (
+        (p.ean || "").trim().toLowerCase() === normalized ||
+        (p.title || "").trim().toLowerCase() === normalized
+      );
+    });
+
+    if (exactMatches.length === 1) {
+      const product = exactMatches[0];
+
+      if (parts.some((part) => part.product_id === product.id)) {
+        setSelectedProduct(null);
+        setToast({
+          type: "info",
+          message: "Questo ricambio e' gia' presente nella scheda.",
+        });
+        return;
+      }
+
+      if (Number(product.warehouse_qty || 0) <= 0) {
+        setSelectedProduct(null);
+        setToast({
+          type: "error",
+          message: "Prodotto trovato ma non disponibile a magazzino.",
+        });
+        return;
+      }
+
+      setSelectedProduct(product);
+      setToast({
+        type: "success",
+        message: "Ricambio trovato e selezionato.",
+      });
+      return;
+    }
+
+    if (exactMatches.length === 0) {
+      setSelectedProduct(null);
+      setToast({
+        type: "error",
+        message: "Nessun prodotto trovato con il codice scansionato.",
+      });
+      return;
+    }
+
+    setToast({
+      type: "info",
+      message: "Piu' prodotti trovati: scegli il ricambio dalla lista filtrata.",
+    });
+  }
 
   async function upsertPartMovement(productId: string, finalQty: number) {
     const { data: movementRows, error: readError } = await supabase
@@ -1541,12 +1600,18 @@ export default function WorkOrderDetailPage() {
           subtitle="Cerca un prodotto, selezionalo e definisci quantità e prezzo."
           icon={<Wrench size={22} strokeWidth={2.2} />}
         >
-          <input
-            placeholder="Cerca prodotto o EAN..."
-            value={partSearch}
-            onChange={(e) => setPartSearch(e.target.value)}
-            className="apple-input workorder-modal-input"
-          />
+          <div className="product-search-scan-row">
+            <input
+              placeholder="Cerca prodotto o EAN..."
+              value={partSearch}
+              onChange={(e) => {
+                setPartSearch(e.target.value);
+                setSelectedProduct(null);
+              }}
+              className="apple-input workorder-modal-input"
+            />
+            <ScanProductButton onScan={handlePartProductScan} />
+          </div>
 
           <div className="workorder-modal-results">
             {partSearch.trim().length < 2 ? (

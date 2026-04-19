@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import ScanProductButton from "@/components/ScanProductButton";
 import { Package2 } from "lucide-react";
 
 type ProductForm = {
@@ -350,12 +351,26 @@ export default function NewInventoryPage() {
                 placeholder="Es. Camera d'aria 700x25"
               />
 
-              <InputField
-                label="EAN / Codice"
-                value={form.ean}
-                onChange={(v) => updateField("ean", v)}
-                placeholder="Codice EAN o interno"
-              />
+              <div className="inventory-new-field">
+                <label className="inventory-new-label">EAN / Codice</label>
+                <div className="product-search-scan-row">
+                  <input
+                    className="inventory-new-input"
+                    value={form.ean}
+                    onChange={(e) => updateField("ean", e.target.value)}
+                    placeholder="Codice EAN o interno"
+                  />
+                  <ScanProductButton
+                    onScan={(value) => {
+                      updateField("ean", value);
+                      setToast({
+                        type: "success",
+                        message: "Codice acquisito correttamente.",
+                      });
+                    }}
+                  />
+                </div>
+              </div>
             </div>
 
             <TextAreaField

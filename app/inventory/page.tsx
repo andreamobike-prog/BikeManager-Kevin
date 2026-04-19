@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Modal from "@/components/Modal";
+import ScanProductButton from "@/components/ScanProductButton";
 import { AlertTriangle, Upload, Download, Plus, Package2 } from "lucide-react";
 
 type Product = {
@@ -396,6 +397,43 @@ export default function InventoryPage() {
     return qty > 0 && qty <= min;
   }).length;
 
+  function handleProductScan(value: string) {
+    const code = value.trim();
+    if (!code) return;
+
+    setSearch(code);
+
+    const normalized = code.toLowerCase();
+    const exactMatches = products.filter((p) => {
+      return (
+        (p.ean || "").trim().toLowerCase() === normalized ||
+        (p.title || "").trim().toLowerCase() === normalized
+      );
+    });
+
+    if (exactMatches.length === 1) {
+      setEditProduct(exactMatches[0]);
+      setToast({
+        type: "success",
+        message: "Prodotto trovato e selezionato.",
+      });
+      return;
+    }
+
+    if (exactMatches.length === 0) {
+      setToast({
+        type: "error",
+        message: "Nessun prodotto trovato con il codice scansionato.",
+      });
+      return;
+    }
+
+    setToast({
+      type: "info",
+      message: "Piu' prodotti trovati: filtra la lista con il codice scansionato.",
+    });
+  }
+
   return (
     <div style={container}>
       {toast && (
@@ -491,13 +529,16 @@ export default function InventoryPage() {
       <div className="inventory-results-panel">
         <div className="inventory-filters-inner" style={filtersCard}>
           <div style={filtersGrid}>
-            <input
-              className="inventory-filters-control"
-              placeholder="Cerca nome, EAN, descrizione, posizione o fornitore..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={searchInput}
-            />
+            <div className="product-search-scan-row">
+              <input
+                className="inventory-filters-control"
+                placeholder="Cerca nome, EAN, descrizione, posizione o fornitore..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={searchInput}
+              />
+              <ScanProductButton onScan={handleProductScan} />
+            </div>
 
             <select
               className="inventory-filters-control"

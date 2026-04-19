@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter, useSearchParams } from "next/navigation";
+import ScanProductButton from "@/components/ScanProductButton";
 import { FileText } from "lucide-react";
 
 type Movement = {
@@ -62,6 +63,10 @@ function MovementsContent() {
   const [bikeSearch, setBikeSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [scanMessage, setScanMessage] = useState<{
+    type: "success" | "error" | "info";
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     load();
@@ -278,6 +283,42 @@ function MovementsContent() {
     };
   }, [filtered]);
 
+  function handleProductScan(value: string) {
+    const code = value.trim();
+    if (!code) return;
+
+    setSearch(code);
+
+    const normalized = code.toLowerCase();
+    const exactMatches = products.filter((p) => {
+      return (
+        (p.ean || "").trim().toLowerCase() === normalized ||
+        (p.title || "").trim().toLowerCase() === normalized
+      );
+    });
+
+    if (exactMatches.length === 1) {
+      setScanMessage({
+        type: "success",
+        text: "Prodotto trovato: movimenti filtrati con il codice scansionato.",
+      });
+      return;
+    }
+
+    if (exactMatches.length === 0) {
+      setScanMessage({
+        type: "error",
+        text: "Nessun prodotto trovato con il codice scansionato.",
+      });
+      return;
+    }
+
+    setScanMessage({
+      type: "info",
+      text: "Piu' prodotti trovati: movimenti filtrati con il codice scansionato.",
+    });
+  }
+
   return (
     <div className="app-page-shell movements-page-shell">
       <div className="page-stack">
@@ -293,12 +334,18 @@ function MovementsContent() {
 
         <div className="apple-panel movements-filters-panel">
           <div className="movements-filters-grid">
-            <input
-              className="apple-input"
-              placeholder="Cerca prodotto, EAN, bici, telaio, cliente, scheda..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <div className="product-search-scan-row">
+              <input
+                className="apple-input"
+                placeholder="Cerca prodotto, EAN, bici, telaio, cliente, scheda..."
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setScanMessage(null);
+                }}
+              />
+              <ScanProductButton onScan={handleProductScan} />
+            </div>
 
             <select
               className="apple-select"
@@ -336,11 +383,20 @@ function MovementsContent() {
                 setBikeSearch("");
                 setDateFrom("");
                 setDateTo("");
+                setScanMessage(null);
               }}
             >
               Reset
             </button>
           </div>
+
+          {scanMessage && (
+            <div
+              className={`product-scan-feedback product-scan-feedback--${scanMessage.type}`}
+            >
+              {scanMessage.text}
+            </div>
+          )}
 
           <div className="movements-bike-filter-section">
             <div className="movements-bike-filter-header">
@@ -530,4 +586,3 @@ function StatCard({ label, value }: { label: string; value: number }) {
     </div>
   );
 }
-

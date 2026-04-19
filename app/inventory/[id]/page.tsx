@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useParams, useRouter } from "next/navigation";
+import ScanProductButton from "@/components/ScanProductButton";
 
 type Product = {
   id: string;
@@ -301,11 +302,30 @@ export default function InventoryProductDetailPage() {
               </Field>
 
               <Field label="EAN">
-                <Input
-                  value={draft.ean}
-                  edit={edit}
-                  onChange={(v) => update("ean", v)}
-                />
+                {edit ? (
+                  <div className="product-search-scan-row">
+                    <input
+                      className="apple-input"
+                      value={draft.ean || ""}
+                      onChange={(e) => update("ean", e.target.value)}
+                    />
+                    <ScanProductButton
+                      onScan={(value) => {
+                        update("ean", value);
+                        setToast({
+                          type: "success",
+                          message: "Codice acquisito correttamente.",
+                        });
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <Input
+                    value={draft.ean}
+                    edit={edit}
+                    onChange={(v) => update("ean", v)}
+                  />
+                )}
               </Field>
             </div>
 

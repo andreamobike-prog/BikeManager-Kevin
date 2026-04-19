@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import ScanProductButton from "@/components/ScanProductButton";
 
 type InventoryBike = {
   id: string;
@@ -127,6 +128,54 @@ export default function BikeAssembly() {
   const projectedWarehouseQty = selectedProduct
     ? Number(selectedProduct.warehouse_qty || 0) - Number(quantity || 0)
     : 0;
+
+  function handleProductScan(value: string) {
+    const code = value.trim();
+    if (!code) return;
+
+    setProductSearch(code);
+
+    const normalized = code.toLowerCase();
+    const exactMatches = products.filter((p) => {
+      return (
+        (p.ean || "").trim().toLowerCase() === normalized ||
+        (p.title || "").trim().toLowerCase() === normalized
+      );
+    });
+
+    if (exactMatches.length === 1) {
+      const product = exactMatches[0];
+      if (Number(product.warehouse_qty || 0) <= 0) {
+        setSelectedProduct(null);
+        setToast({
+          message: "Prodotto trovato ma non disponibile a magazzino.",
+          type: "error",
+        });
+        return;
+      }
+
+      setSelectedProduct(product);
+      setToast({
+        message: "Componente trovato e selezionato.",
+        type: "success",
+      });
+      return;
+    }
+
+    if (exactMatches.length === 0) {
+      setSelectedProduct(null);
+      setToast({
+        message: "Nessun prodotto trovato con il codice scansionato.",
+        type: "error",
+      });
+      return;
+    }
+
+    setToast({
+      message: "Piu' prodotti trovati: scegli il componente dalla lista filtrata.",
+      type: "info",
+    });
+  }
 
   async function assemble() {
     setToast(null);
@@ -366,12 +415,18 @@ export default function BikeAssembly() {
             <span style={counterBadge}>{filteredProducts.length}</span>
           </div>
 
-          <input
-            placeholder="Cerca per nome ricambio o EAN..."
-            value={productSearch}
-            onChange={(e) => setProductSearch(e.target.value)}
-            style={search}
-          />
+          <div style={scanRow}>
+            <input
+              placeholder="Cerca per nome ricambio o EAN..."
+              value={productSearch}
+              onChange={(e) => {
+                setProductSearch(e.target.value);
+                setSelectedProduct(null);
+              }}
+              style={{ ...search, marginBottom: 0, flex: 1, minWidth: 0 }}
+            />
+            <ScanProductButton onScan={handleProductScan} buttonStyle={scanButton} />
+          </div>
 
           <div style={list}>
             {filteredProducts.map((p) => {
@@ -585,6 +640,18 @@ const search: React.CSSProperties = {
   borderRadius: 12,
   fontSize: 14,
   outline: "none",
+};
+
+const scanRow: React.CSSProperties = {
+  display: "flex",
+  gap: 12,
+  alignItems: "stretch",
+  marginBottom: 16,
+};
+
+const scanButton: React.CSSProperties = {
+  minHeight: 44,
+  padding: "12px 14px",
 };
 
 const list: React.CSSProperties = {

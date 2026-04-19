@@ -6943,6 +6943,190 @@ img {
 }
 
 /* =========================
+   Scanner prodotto
+   components/ScanProductButton.tsx
+   ========================= */
+
+.product-scanner-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1800;
+  background: rgba(15, 23, 42, 0.52);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.product-scanner-modal {
+  width: min(100%, 620px);
+  max-height: calc(100vh - 48px);
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  overflow: auto;
+}
+
+.product-scanner-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.product-scanner-title {
+  margin: 0;
+  color: #1f3353;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.product-scanner-subtitle {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.product-scanner-close {
+  width: 42px;
+  height: 42px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #1f3353;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.product-scanner-video-wrap {
+  position: relative;
+  margin: 22px;
+  background: #0f172a;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+}
+
+.product-scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.product-scanner-frame {
+  position: absolute;
+  inset: 20%;
+  border: 2px solid rgba(255, 255, 255, 0.86);
+  box-shadow: 0 0 0 999px rgba(15, 23, 42, 0.2);
+  pointer-events: none;
+}
+
+.product-scanner-message {
+  margin: 0 22px 18px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.product-scanner-message--error {
+  border-color: #fca5a5;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.product-scanner-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 22px 22px;
+}
+
+.product-search-scan-row {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.product-search-scan-row > .apple-input,
+.product-search-scan-row > input {
+  min-width: 0;
+  flex: 1;
+}
+
+.product-search-scan-row > .btn-secondary,
+.product-search-scan-row > .btn-primary {
+  flex-shrink: 0;
+}
+
+.product-scan-feedback {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.product-scan-feedback--success {
+  border-color: #86efac;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.product-scan-feedback--error {
+  border-color: #fca5a5;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@media (max-width: 760px) {
+  .product-scanner-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .product-scanner-modal {
+    max-height: 92vh;
+    width: 100%;
+  }
+
+  .product-scanner-header {
+    padding: 18px;
+  }
+
+  .product-scanner-video-wrap {
+    margin: 18px;
+  }
+
+  .product-scanner-message {
+    margin-inline: 18px;
+  }
+
+  .product-scanner-actions {
+    padding: 0 18px 18px;
+  }
+
+  .product-search-scan-row {
+    flex-direction: column;
+  }
+
+  .product-search-scan-row > .btn-secondary,
+  .product-search-scan-row > .btn-primary {
+    width: 100%;
+  }
+}
+
+/* =========================
    Stampa prodotti sotto scorta
    app/print/low-stock
    ========================= */

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import ScanProductButton from "@/components/ScanProductButton";
 
 type InventoryBike = {
   id: string;
@@ -136,6 +137,44 @@ export default function BikeDisassembly() {
     0,
     Number(selectedBike?.current_value || 0) - totalComponentValue
   );
+
+  function handleProductScan(value: string) {
+    const code = value.trim();
+    if (!code) return;
+
+    setProductSearch(code);
+
+    const normalized = code.toLowerCase();
+    const exactMatches = products.filter((p) => {
+      return (
+        (p.ean || "").trim().toLowerCase() === normalized ||
+        (p.title || "").trim().toLowerCase() === normalized
+      );
+    });
+
+    if (exactMatches.length === 1) {
+      setSelectedProduct(exactMatches[0]);
+      setToast({
+        message: "Componente trovato e selezionato.",
+        type: "success",
+      });
+      return;
+    }
+
+    if (exactMatches.length === 0) {
+      setSelectedProduct(null);
+      setToast({
+        message: "Nessun prodotto trovato con il codice scansionato.",
+        type: "error",
+      });
+      return;
+    }
+
+    setToast({
+      message: "Piu' prodotti trovati: scegli il componente dalla lista filtrata.",
+      type: "info",
+    });
+  }
 
   async function disassemble() {
     setToast(null);
@@ -308,6 +347,20 @@ export default function BikeDisassembly() {
     fontSize: 14,
     outline: "none",
     boxSizing: "border-box",
+  };
+
+  const scanRow: React.CSSProperties = {
+    display: "flex",
+    gap: 12,
+    alignItems: "stretch",
+    marginBottom: 16,
+    flexDirection: isMobile ? "column" : "row",
+  };
+
+  const scanButton: React.CSSProperties = {
+    minHeight: 44,
+    padding: "12px 14px",
+    width: isMobile ? "100%" : "auto",
   };
 
   const list: React.CSSProperties = {
@@ -748,12 +801,18 @@ export default function BikeDisassembly() {
             <span style={counterBadge}>{filteredProducts.length}</span>
           </div>
 
-          <input
-            placeholder="Cerca per nome ricambio o EAN..."
-            value={productSearch}
-            onChange={(e) => setProductSearch(e.target.value)}
-            style={search}
-          />
+          <div style={scanRow}>
+            <input
+              placeholder="Cerca per nome ricambio o EAN..."
+              value={productSearch}
+              onChange={(e) => {
+                setProductSearch(e.target.value);
+                setSelectedProduct(null);
+              }}
+              style={{ ...search, marginBottom: 0, flex: 1, minWidth: 0 }}
+            />
+            <ScanProductButton onScan={handleProductScan} buttonStyle={scanButton} />
+          </div>
 
           <div style={list}>
             {filteredProducts.map((p) => (

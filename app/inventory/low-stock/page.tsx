@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import ScanProductButton from "@/components/ScanProductButton";
 import { Download, ArrowLeft } from "lucide-react";
 
 type Product = {
@@ -262,6 +263,42 @@ export default function LowStockPage() {
   const totalMissing = filtered.reduce((acc, p) => acc + shortageAmount(p), 0);
   const totalReorderValue = filtered.reduce((acc, p) => acc + reorderEstimatedValue(p), 0);
 
+  function handleProductScan(value: string) {
+    const code = value.trim();
+    if (!code) return;
+
+    setSearch(code);
+
+    const normalized = code.toLowerCase();
+    const exactMatches = lowStockBase.filter((p) => {
+      return (
+        (p.ean || "").trim().toLowerCase() === normalized ||
+        (p.title || "").trim().toLowerCase() === normalized
+      );
+    });
+
+    if (exactMatches.length === 1) {
+      setToast({
+        type: "success",
+        message: "Prodotto sotto scorta trovato.",
+      });
+      return;
+    }
+
+    if (exactMatches.length === 0) {
+      setToast({
+        type: "error",
+        message: "Nessun prodotto sotto scorta trovato con il codice scansionato.",
+      });
+      return;
+    }
+
+    setToast({
+      type: "info",
+      message: "Piu' prodotti trovati: filtra la lista con il codice scansionato.",
+    });
+  }
+
   return (
     <div className="low-stock-page">
       {toast && (
@@ -328,12 +365,15 @@ export default function LowStockPage() {
 
       <div className="low-stock-filters-card">
         <div className="low-stock-filters-grid">
-          <input
-            className="low-stock-search-input"
-            placeholder="Ricerca: nome, EAN, descrizione, posizione, fornitore..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div className="product-search-scan-row">
+            <input
+              className="low-stock-search-input"
+              placeholder="Ricerca: nome, EAN, descrizione, posizione, fornitore..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <ScanProductButton onScan={handleProductScan} />
+          </div>
 
           <select
             className="low-stock-select"

@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { supabase } from "@/lib/supabase"
+import ScanProductButton from "@/components/ScanProductButton"
 
 export default function ProductsPage(){
 
@@ -55,6 +56,12 @@ onChange={(e)=>setTitle(e.target.value)}
 placeholder="EAN"
 value={ean}
 onChange={(e)=>setEan(e.target.value)}
+/>
+
+<br/><br/>
+
+<ScanProductButton
+onScan={(value)=>setEan(value)}
 />
 
 <br/><br/>
