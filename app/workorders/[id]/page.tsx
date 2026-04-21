@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import ScanProductButton from "@/components/ScanProductButton";
@@ -63,6 +63,47 @@ type Toast = {
   message: string;
 } | null;
 
+const MINUTES_PER_HOUR = 60;
+
+function hoursToMinutes(hours: number | null | undefined) {
+  return Math.max(0, Math.round(Number(hours ?? 0) * MINUTES_PER_HOUR));
+}
+
+function minutesToHours(minutes: number) {
+  return minutes / MINUTES_PER_HOUR;
+}
+
+function normalizeMinutesInput(value: string) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return Math.round(parsed);
+}
+
+function formatMinutesLabel(hours: number | null | undefined) {
+  const totalMinutes = hoursToMinutes(hours);
+
+  if (totalMinutes <= 0) {
+    return "0 min";
+  }
+
+  const wholeHours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
+  const remainingMinutes = totalMinutes % MINUTES_PER_HOUR;
+
+  if (wholeHours > 0 && remainingMinutes > 0) {
+    return `${wholeHours} h ${remainingMinutes} min`;
+  }
+
+  if (wholeHours > 0) {
+    return `${wholeHours} h`;
+  }
+
+  return `${totalMinutes} min`;
+}
+
 export default function WorkOrderDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -93,7 +134,7 @@ export default function WorkOrderDetailPage() {
 
   const [newService, setNewService] = useState({
     title: "",
-    hours: 1,
+    minutes: 60,
     notes: "",
     custom_price: "",
     service_date: new Date().toISOString().split("T")[0],
@@ -108,18 +149,12 @@ export default function WorkOrderDetailPage() {
   const [servicePriceDrafts, setServicePriceDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (id) {
-      loadData();
-    }
-  }, [id]);
-
-  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 2600);
     return () => clearTimeout(timer);
   }, [toast]);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
 
     const [
@@ -183,7 +218,17 @@ export default function WorkOrderDetailPage() {
     setServiceHoursDrafts({});
     setServicePriceDrafts({});
     setLoading(false);
-  }
+  }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      const timer = window.setTimeout(() => {
+        void loadData();
+      }, 0);
+
+      return () => window.clearTimeout(timer);
+    }
+  }, [id, loadData]);
 
   const productsMap = useMemo(() => {
     const map: Record<string, Product> = {};
@@ -799,7 +844,8 @@ export default function WorkOrderDetailPage() {
   }
 
   async function saveService() {
-    const hours = Number(newService.hours) || 0;
+    const minutes = normalizeMinutesInput(String(newService.minutes));
+    const hours = minutesToHours(minutes);
     const customPrice =
       newService.custom_price !== "" ? Number(newService.custom_price) : null;
 
@@ -836,7 +882,7 @@ export default function WorkOrderDetailPage() {
     setShowServiceModal(false);
     setNewService({
       title: "",
-      hours: 1,
+      minutes: 60,
       notes: "",
       custom_price: "",
       service_date: new Date().toISOString().split("T")[0],
@@ -915,18 +961,18 @@ export default function WorkOrderDetailPage() {
 
   const hasPendingServiceChanges = useMemo(() => {
     return services.some((s) => {
-      const hoursDraft = serviceHoursDrafts[s.id];
+      const minutesDraft = serviceHoursDrafts[s.id];
       const priceDraft = servicePriceDrafts[s.id];
 
-      const normalizedCurrentHours = Number(s.hours ?? 0);
-      const normalizedDraftHours =
-        hoursDraft !== undefined
-          ? Math.round((Number(hoursDraft.replace(",", ".")) || 0) * 2) / 2
-          : normalizedCurrentHours;
+      const currentMinutes = hoursToMinutes(s.hours);
+      const normalizedDraftMinutes =
+        minutesDraft !== undefined
+          ? normalizeMinutesInput(minutesDraft)
+          : currentMinutes;
 
-      const hoursChanged =
-        hoursDraft !== undefined &&
-        normalizedDraftHours !== normalizedCurrentHours;
+      const minutesChanged =
+        minutesDraft !== undefined &&
+        normalizedDraftMinutes !== currentMinutes;
 
       const effectiveCurrentPrice = Number(
         s.custom_price ?? Number(s.hours || 0) * hourlyRate
@@ -942,20 +988,20 @@ export default function WorkOrderDetailPage() {
             Number(priceDraft.replace(",", ".")) !== effectiveCurrentPrice)
         );
 
-      return hoursChanged || priceChanged;
+      return minutesChanged || priceChanged;
     });
   }, [services, serviceHoursDrafts, servicePriceDrafts, hourlyRate]);
 
-  async function updateServiceHours(serviceId: string, hours: number) {
-    if (!Number.isFinite(hours) || hours < 0) {
+  async function updateServiceHours(serviceId: string, minutes: number) {
+    if (!Number.isFinite(minutes) || minutes < 0) {
       setToast({
         type: "error",
-        message: "Le ore devono essere un valore valido.",
+        message: "I minuti devono essere un valore valido.",
       });
       return false;
     }
 
-    const normalizedHours = Math.round(hours * 2) / 2;
+    const normalizedHours = minutesToHours(Math.round(minutes));
 
     const { data: updatedService, error } = await supabase
       .from("work_order_services")
@@ -965,10 +1011,10 @@ export default function WorkOrderDetailPage() {
       .single();
 
     if (error || !updatedService) {
-      console.error("Errore update ore intervento:", error);
+      console.error("Errore update minuti intervento:", error);
       setToast({
         type: "error",
-        message: "Salvataggio ore non riuscito.",
+        message: "Salvataggio minuti non riuscito.",
       });
       return false;
     }
@@ -1010,24 +1056,24 @@ export default function WorkOrderDetailPage() {
     setSavingService(true);
 
     for (const s of services) {
-      const hoursDraft = serviceHoursDrafts[s.id];
+      const minutesDraft = serviceHoursDrafts[s.id];
       const priceDraft = servicePriceDrafts[s.id];
 
-      if (hoursDraft !== undefined) {
-        const parsedHours = Number(hoursDraft.replace(",", "."));
-        const normalizedHours = Math.round((parsedHours || 0) * 2) / 2;
+      if (minutesDraft !== undefined) {
+        const parsedMinutes = Number(minutesDraft);
+        const normalizedMinutes = normalizeMinutesInput(minutesDraft);
 
-        if (!Number.isFinite(parsedHours) || parsedHours < 0) {
+        if (!Number.isFinite(parsedMinutes) || parsedMinutes < 0) {
           setToast({
             type: "error",
-            message: "Uno dei valori ore non è valido.",
+            message: "Uno dei valori minuti non è valido.",
           });
           setSavingService(false);
           return;
         }
 
-        if (normalizedHours !== Number(s.hours ?? 0)) {
-          const hoursOk = await updateServiceHours(s.id, normalizedHours);
+        if (normalizedMinutes !== hoursToMinutes(s.hours)) {
+          const hoursOk = await updateServiceHours(s.id, normalizedMinutes);
           if (!hoursOk) {
             setSavingService(false);
             return;
@@ -1399,7 +1445,7 @@ export default function WorkOrderDetailPage() {
           <div>
             <h2 className="workorder-detail-section-heading">Interventi</h2>
             <p className="workorder-detail-section-text">
-              Inserisci lavorazioni, ore e prezzo manuale quando necessario.
+              Inserisci lavorazioni, minuti e prezzo manuale quando necessario.
             </p>
           </div>
 
@@ -1431,7 +1477,7 @@ export default function WorkOrderDetailPage() {
                 <tr>
                   <th>Data</th>
                   <th>Intervento</th>
-                  <th>Ore</th>
+                  <th>Minuti</th>
                   <th>Note</th>
                   <th>Prezzo</th>
                   <th>Fattura</th>
@@ -1441,12 +1487,10 @@ export default function WorkOrderDetailPage() {
 
               <tbody>
                 {services.map((s) => {
-                  const currentHoursText =
+                  const currentMinutesText =
                     serviceHoursDrafts[s.id] !== undefined
                       ? serviceHoursDrafts[s.id]
-                      : String(Number(s.hours ?? 0).toFixed(1)).replace(".0", "");
-
-                  const parsedCurrentHours = Number(currentHoursText.replace(",", ".")) || 0;
+                      : String(hoursToMinutes(s.hours));
 
                   const currentPriceText =
                     servicePriceDrafts[s.id] !== undefined
@@ -1457,49 +1501,51 @@ export default function WorkOrderDetailPage() {
                         ).toFixed(2)
                       ).replace(".", ",");
 
-                  const parsedCurrentPrice =
-                    Number(currentPriceText.replace(",", ".")) || 0;
-
                   return (
                     <tr key={s.id}>
                       <td>{s.service_date || "-"}</td>
                       <td>
                         <div className="workorder-detail-cell-title">{s.title}</div>
+                        <div className="workorder-detail-cell-sub">
+                          {formatMinutesLabel(s.hours)}
+                        </div>
                       </td>
                       <td>
                         <input
                           type="number"
-                          step="0.5"
-                          min="0"
-                          inputMode="decimal"
-                          value={currentHoursText}
+                          step={1}
+                          min={0}
+                          inputMode="numeric"
+                          value={currentMinutesText}
                           onChange={(e) => {
+                            const sanitized = e.target.value.replace(/[^\d]/g, "");
                             setServiceHoursDrafts((prev) => ({
                               ...prev,
-                              [s.id]: e.target.value,
+                              [s.id]: sanitized,
                             }));
                           }}
                           onBlur={(e) => {
-                            const raw = e.target.value.trim().replace(",", ".");
+                            const raw = e.target.value.trim();
                             const parsed = Number(raw);
 
                             if (!Number.isFinite(parsed) || parsed < 0) {
                               setServiceHoursDrafts((prev) => ({
                                 ...prev,
-                                [s.id]: String(Number(s.hours ?? 0).toFixed(1)).replace(".0", ""),
+                                [s.id]: String(hoursToMinutes(s.hours)),
                               }));
                               return;
                             }
 
-                            const normalized = Math.round(parsed * 2) / 2;
+                            const normalized = normalizeMinutesInput(raw);
 
                             setServiceHoursDrafts((prev) => ({
                               ...prev,
-                              [s.id]: String(normalized).replace(".0", ""),
+                              [s.id]: String(normalized),
                             }));
                           }}
                           className="workorder-detail-small-input"
                           disabled={rowUpdatingId === s.id}
+                          placeholder="60"
                         />
                       </td>
                       <td>{s.notes || "-"}</td>
@@ -1777,17 +1823,20 @@ export default function WorkOrderDetailPage() {
             </div>
 
             <div>
-              <label className="workorder-modal-label">Ore</label>
+              <label className="workorder-modal-label">Minuti</label>
               <input
                 type="number"
-                step="0.25"
-                value={newService.hours}
+                min={0}
+                step={1}
+                inputMode="numeric"
+                value={newService.minutes}
                 onChange={(e) =>
                   setNewService({
                     ...newService,
-                    hours: Number(e.target.value),
+                    minutes: normalizeMinutesInput(e.target.value),
                   })
                 }
+                placeholder="es. 30"
                 className="apple-input workorder-modal-input"
               />
             </div>

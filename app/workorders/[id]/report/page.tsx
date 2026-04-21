@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { Printer, Download, Mail, Archive } from "lucide-react";
@@ -74,13 +74,39 @@ type ComputedService = {
   title: string;
   hours?: number | null;
   service_date?: string | null;
-  calculatedPrice: number;
-  appliedPrice: number;
+  linePrice: number;
   modified: boolean;
   billable?: boolean;
 };
 
 type ToastType = "success" | "error" | "info";
+
+const MINUTES_PER_HOUR = 60;
+
+function hoursToMinutes(hours: number | null | undefined) {
+  return Math.max(0, Math.round(Number(hours ?? 0) * MINUTES_PER_HOUR));
+}
+
+function formatMinutesLabel(hours: number | null | undefined) {
+  const totalMinutes = hoursToMinutes(hours);
+
+  if (totalMinutes <= 0) {
+    return "0 min";
+  }
+
+  const wholeHours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
+  const remainingMinutes = totalMinutes % MINUTES_PER_HOUR;
+
+  if (wholeHours > 0 && remainingMinutes > 0) {
+    return `${wholeHours} h ${remainingMinutes} min`;
+  }
+
+  if (wholeHours > 0) {
+    return `${wholeHours} h`;
+  }
+
+  return `${totalMinutes} min`;
+}
 
 export default function WorkOrderReport() {
   const params = useParams();
@@ -106,19 +132,7 @@ export default function WorkOrderReport() {
 
   const hourlyRate = 35;
 
-  useEffect(() => {
-    if (id) {
-      loadData();
-    }
-  }, [id]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 2800);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
 
     const [
@@ -186,7 +200,23 @@ export default function WorkOrderReport() {
     }
 
     setLoading(false);
-  }
+  }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      const timer = window.setTimeout(() => {
+        void loadData();
+      }, 0);
+
+      return () => window.clearTimeout(timer);
+    }
+  }, [id, loadData]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const productsMap = useMemo(() => {
     const map: Record<string, Product> = {};
@@ -215,18 +245,14 @@ export default function WorkOrderReport() {
   const servicesComputed: ComputedService[] = useMemo(() => {
     return services.map((s) => {
       const hours = Number(s.hours || 0);
-      const hourlyApplied = s.custom_price ?? hourlyRate;
-      const calculatedPrice = hours * hourlyApplied;
+      const linePrice = Number(s.custom_price ?? hours * hourlyRate);
       const modified =
-        s.custom_price !== null &&
-        s.custom_price !== undefined &&
-        Number(s.custom_price) !== Number(hourlyRate);
+        s.custom_price !== null && s.custom_price !== undefined;
 
       return {
         ...s,
         billable: Boolean(s.billable ?? true),
-        calculatedPrice,
-        appliedPrice: hourlyApplied,
+        linePrice,
         modified,
       };
     });
@@ -234,7 +260,7 @@ export default function WorkOrderReport() {
 
   const partsTotal = partsComputed.reduce((acc, p) => acc + p.rowTotal, 0);
   const serviceTotal = servicesComputed.reduce(
-    (acc, s) => acc + s.appliedPrice,
+    (acc, s) => acc + s.linePrice,
     0
   );
   const total = partsTotal + serviceTotal;
@@ -630,8 +656,8 @@ export default function WorkOrderReport() {
           <tr>
             <th>Data</th>
             <th>Intervento</th>
-            <th>Ore</th>
-            <th>Prezzo orario</th>
+            <th>Minuti</th>
+            <th>Prezzo</th>
             <th>Totale fatturabile</th>
             <th>Indicatore interno</th>
           </tr>
@@ -649,9 +675,9 @@ export default function WorkOrderReport() {
               <tr key={s.id}>
                 <td>{formatDate(s.service_date)}</td>
                 <td>{s.title}</td>
-                <td>{s.hours || 0}</td>
-                <td>{formatCurrency(s.appliedPrice)}</td>
-                <td>{formatCurrency(s.calculatedPrice)}</td>
+                <td>{formatMinutesLabel(s.hours)}</td>
+                <td>{formatCurrency(s.linePrice)}</td>
+                <td>{formatCurrency(s.linePrice)}</td>
                 <td className="report-cell-center">
                   {Boolean(s.billable ?? true) ? (
                     <span className="report-pill report-pill--green">
@@ -693,7 +719,7 @@ export default function WorkOrderReport() {
                 ? formatCurrency(
                   servicesComputed.reduce((acc, s) => {
                     return Boolean(s.billable ?? true)
-                      ? acc + Number(s.calculatedPrice || 0)
+                      ? acc + Number(s.linePrice || 0)
                       : acc;
                   }, 0)
                 )
@@ -718,7 +744,7 @@ export default function WorkOrderReport() {
               }, 0) +
               servicesComputed.reduce((acc, s) => {
                 return Boolean(s.billable ?? true)
-                  ? acc + Number(s.calculatedPrice || 0)
+                  ? acc + Number(s.linePrice || 0)
                   : acc;
               }, 0)
             )}
